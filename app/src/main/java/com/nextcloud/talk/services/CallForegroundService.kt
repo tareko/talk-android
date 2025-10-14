@@ -114,7 +114,8 @@ class CallForegroundService : Service() {
             return 0
         }
 
-        var serviceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        var serviceType =
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
         val isVoiceOnlyCall = callExtras?.getBoolean(KEY_CALL_VOICE_ONLY, false) ?: false
         val canPublishVideo = callExtras?.getBoolean(
             KEY_PARTICIPANT_PERMISSION_CAN_PUBLISH_VIDEO,
