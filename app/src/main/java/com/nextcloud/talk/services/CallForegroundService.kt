@@ -6,18 +6,23 @@
  */
 package com.nextcloud.talk.services
 
+import android.Manifest
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
+import android.app.role.RoleManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.telecom.TelecomManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE
 import androidx.core.content.ContextCompat
+import androidx.core.content.getSystemService
 import com.nextcloud.talk.R
 import com.nextcloud.talk.activities.CallActivity
 import com.nextcloud.talk.application.NextcloudTalkApplication
@@ -114,8 +119,11 @@ class CallForegroundService : Service() {
             return 0
         }
 
-        var serviceType =
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        var serviceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+
+        if (shouldIncludePhoneCallForegroundType()) {
+            serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+        }
         val isVoiceOnlyCall = callExtras?.getBoolean(KEY_CALL_VOICE_ONLY, false) ?: false
         val canPublishVideo = callExtras?.getBoolean(
             KEY_PARTICIPANT_PERMISSION_CAN_PUBLISH_VIDEO,
@@ -127,6 +135,39 @@ class CallForegroundService : Service() {
         }
 
         return serviceType
+    }
+
+    private fun shouldIncludePhoneCallForegroundType(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return false
+        }
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            return true
+        }
+
+        val hasManageOwnCallsPermission =
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.MANAGE_OWN_CALLS
+            ) == PackageManager.PERMISSION_GRANTED
+        if (hasManageOwnCallsPermission) {
+            return true
+        }
+
+        val roleManager = getSystemService<RoleManager>()
+        if (roleManager?.isRoleAvailable(RoleManager.ROLE_DIALER) == true &&
+            roleManager.isRoleHeld(RoleManager.ROLE_DIALER)
+        ) {
+            return true
+        }
+
+        val telecomManager = getSystemService<TelecomManager>()
+        if (telecomManager?.defaultDialerPackage == packageName) {
+            return true
+        }
+
+        return false
     }
 
     companion object {
