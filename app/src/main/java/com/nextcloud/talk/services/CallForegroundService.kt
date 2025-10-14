@@ -11,6 +11,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
@@ -21,6 +22,8 @@ import com.nextcloud.talk.R
 import com.nextcloud.talk.activities.CallActivity
 import com.nextcloud.talk.application.NextcloudTalkApplication
 import com.nextcloud.talk.utils.NotificationUtils
+import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_CALL_VOICE_ONLY
+import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_PARTICIPANT_PERMISSION_CAN_PUBLISH_VIDEO
 
 class CallForegroundService : Service() {
 
@@ -35,7 +38,7 @@ class CallForegroundService : Service() {
             startForeground(
                 NOTIFICATION_ID,
                 notification,
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+                resolveForegroundServiceType(callExtras)
             )
         } else {
             startForeground(NOTIFICATION_ID, notification)
@@ -84,6 +87,25 @@ class CallForegroundService : Service() {
 
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         return PendingIntent.getActivity(this, 0, intent, flags)
+    }
+
+    private fun resolveForegroundServiceType(callExtras: Bundle?): Int {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return 0
+        }
+
+        var serviceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        val isVoiceOnlyCall = callExtras?.getBoolean(KEY_CALL_VOICE_ONLY, false) ?: false
+        val canPublishVideo = callExtras?.getBoolean(
+            KEY_PARTICIPANT_PERMISSION_CAN_PUBLISH_VIDEO,
+            false
+        ) ?: false
+
+        if (!isVoiceOnlyCall && canPublishVideo) {
+            serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+        }
+
+        return serviceType
     }
 
     companion object {
