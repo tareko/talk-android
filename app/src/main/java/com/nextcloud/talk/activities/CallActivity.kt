@@ -1960,7 +1960,11 @@ class CallActivity : CallBaseActivity() {
 
                     if (!webSocketCommunicationEvent.getHashMap()!!.containsKey("oldResumeId")) {
                         if (currentCallStatus === CallStatus.RECONNECTING) {
-                            hangup(false, false)
+                            hangup(
+                                shutDownView = false,
+                                endCallForAll = false,
+                                notifyServer = false
+                            )
                         } else {
                             setCallState(CallStatus.RECONNECTING)
                             runOnUiThread { initiateCall() }

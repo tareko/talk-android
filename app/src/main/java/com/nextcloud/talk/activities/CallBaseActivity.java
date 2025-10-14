@@ -97,9 +97,6 @@ public abstract class CallBaseActivity extends BaseActivity {
     @Override
     public void onStop() {
         super.onStop();
-        if (isInPipMode) {
-            finish();
-        }
     }
 
     @Override
