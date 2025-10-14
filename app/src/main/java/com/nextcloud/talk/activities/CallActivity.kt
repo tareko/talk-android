@@ -80,6 +80,7 @@ import com.nextcloud.talk.data.user.model.User
 import com.nextcloud.talk.databinding.CallActivityBinding
 import com.nextcloud.talk.events.ConfigurationChangeEvent
 import com.nextcloud.talk.events.NetworkEvent
+import com.nextcloud.talk.events.LeaveCallEvent
 import com.nextcloud.talk.events.ProximitySensorEvent
 import com.nextcloud.talk.events.WebSocketCommunicationEvent
 import com.nextcloud.talk.models.ExternalSignalingServer
@@ -305,6 +306,7 @@ class CallActivity : CallBaseActivity() {
     private var handler: Handler? = null
     private var currentCallStatus: CallStatus? = null
     private var mediaPlayer: MediaPlayer? = null
+    private var isRecoveringFromCallDrop = false
 
     private val participantItems = mutableStateListOf<ParticipantDisplayItem>()
     private var binding: CallActivityBinding? = null
@@ -675,7 +677,11 @@ class CallActivity : CallBaseActivity() {
         binding!!.callStates.callStateRelativeLayout.setOnClickListener {
             if (currentCallStatus === CallStatus.CALLING_TIMEOUT) {
                 setCallState(CallStatus.RECONNECTING)
-                hangupNetworkCalls(shutDownView = false, endCallForAll = false)
+                hangupNetworkCalls(
+                    shutDownView = false,
+                    endCallForAll = false,
+                    notifyServer = false
+                )
             }
         }
         binding!!.callRecordingIndicator.setOnClickListener {
@@ -1954,7 +1960,11 @@ class CallActivity : CallBaseActivity() {
 
                     if (!webSocketCommunicationEvent.getHashMap()!!.containsKey("oldResumeId")) {
                         if (currentCallStatus === CallStatus.RECONNECTING) {
-                            hangup(false, false)
+                            hangup(
+                                shutDownView = false,
+                                endCallForAll = false,
+                                notifyServer = false
+                            )
                         } else {
                             setCallState(CallStatus.RECONNECTING)
                             runOnUiThread { initiateCall() }
@@ -1980,6 +1990,20 @@ class CallActivity : CallBaseActivity() {
                     }
                 }
             }
+        }
+    }
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onLeaveCallEvent(event: LeaveCallEvent) {
+        if (currentCallStatus === CallStatus.LEAVING || isFinishing || isDestroyed) {
+            return
+        }
+
+        val hangupButton = binding?.hangupButton
+        if (hangupButton != null) {
+            hangupButton.performClick()
+        } else {
+            hangup(shutDownView = true, endCallForAll = false)
         }
     }
 
@@ -2030,7 +2054,11 @@ class CallActivity : CallBaseActivity() {
         }
     }
 
-    private fun hangup(shutDownView: Boolean, endCallForAll: Boolean) {
+    private fun hangup(
+        shutDownView: Boolean,
+        endCallForAll: Boolean,
+        notifyServer: Boolean = true
+    ) {
         Log.d(TAG, "hangup! shutDownView=$shutDownView")
         if (shutDownView) {
             setCallState(CallStatus.LEAVING)
@@ -2060,7 +2088,7 @@ class CallActivity : CallBaseActivity() {
         }
         ApplicationWideCurrentRoomHolder.getInstance().isInCall = false
         ApplicationWideCurrentRoomHolder.getInstance().isDialing = false
-        hangupNetworkCalls(shutDownView, endCallForAll)
+        hangupNetworkCalls(shutDownView, endCallForAll, notifyServer)
     }
 
     private fun terminateAudioVideo() {
@@ -2101,15 +2129,17 @@ class CallActivity : CallBaseActivity() {
         }
     }
 
-    private fun hangupNetworkCalls(shutDownView: Boolean, endCallForAll: Boolean) {
-        Log.d(TAG, "hangupNetworkCalls. shutDownView=$shutDownView")
+    private fun hangupNetworkCalls(
+        shutDownView: Boolean,
+        endCallForAll: Boolean,
+        notifyServer: Boolean
+    ) {
+        Log.d(TAG, "hangupNetworkCalls. shutDownView=$shutDownView notifyServer=$notifyServer")
         val apiVersion = ApiUtils.getCallApiVersion(conversationUser, intArrayOf(ApiUtils.API_V4, 1))
-        if (localStateBroadcaster != null) {
-            localStateBroadcaster!!.destroy()
-        }
-        if (callParticipantList != null) {
-            callParticipantList!!.removeObserver(callParticipantListObserver)
-            callParticipantList!!.destroy()
+        cleanupLocalCallState()
+        if (!notifyServer) {
+            handleLeaveCallCompletion(shutDownView)
+            return
         }
         val endCall: Boolean? = if (endCallForAll) true else null
 
@@ -2122,24 +2152,7 @@ class CallActivity : CallBaseActivity() {
                 }
 
                 override fun onNext(genericOverall: GenericOverall) {
-                    if (switchToRoomToken.isNotEmpty()) {
-                        val intent = Intent(context, ChatActivity::class.java)
-                        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                        val bundle = Bundle()
-                        bundle.putBoolean(KEY_SWITCH_TO_ROOM, true)
-                        bundle.putBoolean(KEY_START_CALL_AFTER_ROOM_SWITCH, true)
-                        bundle.putString(KEY_ROOM_TOKEN, switchToRoomToken)
-                        bundle.putBoolean(KEY_CALL_VOICE_ONLY, isVoiceOnlyCall)
-                        intent.putExtras(bundle)
-                        startActivity(intent)
-                        finish()
-                    } else if (shutDownView) {
-                        finish()
-                    } else if (currentCallStatus === CallStatus.RECONNECTING ||
-                        currentCallStatus === CallStatus.PUBLISHER_FAILED
-                    ) {
-                        initiateCall()
-                    }
+                    handleLeaveCallCompletion(shutDownView)
                 }
 
                 override fun onError(e: Throwable) {
@@ -2151,6 +2164,39 @@ class CallActivity : CallBaseActivity() {
                     // unused atm
                 }
             })
+    }
+
+    private fun cleanupLocalCallState() {
+        if (localStateBroadcaster != null) {
+            localStateBroadcaster!!.destroy()
+            localStateBroadcaster = null
+        }
+        if (callParticipantList != null) {
+            callParticipantList!!.removeObserver(callParticipantListObserver)
+            callParticipantList!!.destroy()
+            callParticipantList = null
+        }
+    }
+
+    private fun handleLeaveCallCompletion(shutDownView: Boolean) {
+        if (switchToRoomToken.isNotEmpty()) {
+            val intent = Intent(context, ChatActivity::class.java)
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            val bundle = Bundle()
+            bundle.putBoolean(KEY_SWITCH_TO_ROOM, true)
+            bundle.putBoolean(KEY_START_CALL_AFTER_ROOM_SWITCH, true)
+            bundle.putString(KEY_ROOM_TOKEN, switchToRoomToken)
+            bundle.putBoolean(KEY_CALL_VOICE_ONLY, isVoiceOnlyCall)
+            intent.putExtras(bundle)
+            startActivity(intent)
+            finish()
+        } else if (shutDownView) {
+            finish()
+        } else if (currentCallStatus === CallStatus.RECONNECTING ||
+            currentCallStatus === CallStatus.PUBLISHER_FAILED
+        ) {
+            initiateCall()
+        }
     }
 
     private fun startVideoCapture(isPortrait: Boolean) {
@@ -2239,6 +2285,9 @@ class CallActivity : CallBaseActivity() {
             currentCallStatus !== CallStatus.LEAVING &&
             ApplicationWideCurrentRoomHolder.getInstance().isInCall
         ) {
+            if (maybeRecoverFromUnexpectedDisconnect()) {
+                return
+            }
             Log.d(TAG, "Most probably a moderator ended the call for all.")
             hangup(shutDownView = true, endCallForAll = false)
             return
@@ -2737,6 +2786,7 @@ class CallActivity : CallBaseActivity() {
         if (binding!!.callStates.errorImageView.visibility != View.GONE) {
             binding!!.callStates.errorImageView.visibility = View.GONE
         }
+        isRecoveringFromCallDrop = false
     }
 
     private fun handleCallStateJoined() {
@@ -2776,6 +2826,18 @@ class CallActivity : CallBaseActivity() {
         if (binding!!.callStates.errorImageView.visibility != View.GONE) {
             binding!!.callStates.errorImageView.visibility = View.GONE
         }
+    }
+
+    private fun maybeRecoverFromUnexpectedDisconnect(): Boolean {
+        if (isRecoveringFromCallDrop || currentCallStatus === CallStatus.LEAVING) {
+            return isRecoveringFromCallDrop
+        }
+        Log.w(TAG, "Local participant missing from call, attempting recovery")
+        isRecoveringFromCallDrop = true
+        setCallState(CallStatus.RECONNECTING)
+        hangup(shutDownView = false, endCallForAll = false, notifyServer = false)
+        ApplicationWideCurrentRoomHolder.getInstance().isDialing = true
+        return true
     }
 
     private fun handleCallStatePublisherFailed() {
