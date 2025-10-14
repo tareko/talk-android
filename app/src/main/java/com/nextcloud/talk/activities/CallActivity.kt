@@ -80,6 +80,7 @@ import com.nextcloud.talk.data.user.model.User
 import com.nextcloud.talk.databinding.CallActivityBinding
 import com.nextcloud.talk.events.ConfigurationChangeEvent
 import com.nextcloud.talk.events.NetworkEvent
+import com.nextcloud.talk.events.LeaveCallEvent
 import com.nextcloud.talk.events.ProximitySensorEvent
 import com.nextcloud.talk.events.WebSocketCommunicationEvent
 import com.nextcloud.talk.models.ExternalSignalingServer
@@ -1980,6 +1981,20 @@ class CallActivity : CallBaseActivity() {
                     }
                 }
             }
+        }
+    }
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onLeaveCallEvent(event: LeaveCallEvent) {
+        if (currentCallStatus === CallStatus.LEAVING || isFinishing || isDestroyed) {
+            return
+        }
+
+        val hangupButton = binding?.hangupButton
+        if (hangupButton != null) {
+            hangupButton.performClick()
+        } else {
+            hangup(shutDownView = true, endCallForAll = false)
         }
     }
 
