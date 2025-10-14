@@ -308,6 +308,10 @@
             android:exported="false"
             android:foregroundServiceType="phoneCall|microphone|camera" />
 
+        <receiver
+            android:name=".receivers.CallNotificationActionReceiver"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}"

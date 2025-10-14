@@ -180,6 +180,7 @@ import org.webrtc.VideoCapturer
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 import java.io.IOException
+import java.lang.ref.WeakReference
 import java.util.Objects
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -381,6 +382,7 @@ class CallActivity : CallBaseActivity() {
         rootEglBase = EglBase.create()
         binding = CallActivityBinding.inflate(layoutInflater)
         setContentView(binding!!.root)
+        currentInstance = WeakReference(this)
         hideNavigationIfNoPipAvailable()
         processExtras(intent.extras!!)
         CallForegroundService.start(applicationContext, conversationName, intent.extras)
@@ -1462,6 +1464,7 @@ class CallActivity : CallBaseActivity() {
         if (currentCallStatus !== CallStatus.LEAVING) {
             hangup(true, false)
         }
+        currentInstance = WeakReference(null)
         CallForegroundService.stop(applicationContext)
         powerManagerUtils!!.updatePhoneState(PowerManagerUtils.PhoneState.IDLE)
         super.onDestroy()
@@ -2028,6 +2031,14 @@ class CallActivity : CallBaseActivity() {
             else ->
                 Log.e(TAG, "unexpected message type when receiving signaling message")
         }
+    }
+
+    private fun leaveCallFromSystemUi() {
+        if (isFinishing || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed)) {
+            return
+        }
+        val endCallForAll = isOneToOneConversation
+        hangup(shutDownView = true, endCallForAll = endCallForAll)
     }
 
     private fun hangup(shutDownView: Boolean, endCallForAll: Boolean) {
@@ -3333,6 +3344,16 @@ class CallActivity : CallBaseActivity() {
 
         private const val SELFVIDEO_WIDTH_4_TO_3_RATIO = 80
         private const val SELFVIDEO_HEIGHT_4_TO_3_RATIO = 104
+        private var currentInstance: WeakReference<CallActivity?> = WeakReference(null)
+
+        fun requestLeaveCall(): Boolean {
+            val activity = currentInstance.get()
+            if (activity != null) {
+                activity.runOnUiThread { activity.leaveCallFromSystemUi() }
+                return true
+            }
+            return false
+        }
         private const val SELFVIDEO_WIDTH_16_TO_9_RATIO = 136
         private const val SELFVIDEO_HEIGHT_16_TO_9_RATIO = 80
 

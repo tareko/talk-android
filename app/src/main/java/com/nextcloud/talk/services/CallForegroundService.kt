@@ -21,6 +21,7 @@ import androidx.core.content.ContextCompat
 import com.nextcloud.talk.R
 import com.nextcloud.talk.activities.CallActivity
 import com.nextcloud.talk.application.NextcloudTalkApplication
+import com.nextcloud.talk.receivers.CallNotificationActionReceiver
 import com.nextcloud.talk.utils.NotificationUtils
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_CALL_VOICE_ONLY
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_PARTICIPANT_PERMISSION_CAN_PUBLISH_VIDEO
@@ -71,6 +72,11 @@ class CallForegroundService : Service() {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setContentIntent(pendingIntent)
             .setShowWhen(false)
+            .addAction(
+                R.drawable.ic_call_end_white_24px,
+                getString(R.string.nc_call_ongoing_notification_leave_action),
+                createLeaveMeetingPendingIntent()
+            )
             .build()
     }
 
@@ -87,6 +93,15 @@ class CallForegroundService : Service() {
 
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         return PendingIntent.getActivity(this, 0, intent, flags)
+    }
+
+    private fun createLeaveMeetingPendingIntent(): PendingIntent {
+        val intent = Intent(this, CallNotificationActionReceiver::class.java).apply {
+            action = CallNotificationActionReceiver.ACTION_LEAVE_CALL
+        }
+
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        return PendingIntent.getBroadcast(this, 1, intent, flags)
     }
 
     private fun resolveForegroundServiceType(callExtras: Bundle?): Int {
