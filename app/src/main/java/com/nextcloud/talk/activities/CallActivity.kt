@@ -677,7 +677,11 @@ class CallActivity : CallBaseActivity() {
         binding!!.callStates.callStateRelativeLayout.setOnClickListener {
             if (currentCallStatus === CallStatus.CALLING_TIMEOUT) {
                 setCallState(CallStatus.RECONNECTING)
-                hangupNetworkCalls(shutDownView = false, endCallForAll = false)
+                hangupNetworkCalls(
+                    shutDownView = false,
+                    endCallForAll = false,
+                    notifyServer = false
+                )
             }
         }
         binding!!.callRecordingIndicator.setOnClickListener {
