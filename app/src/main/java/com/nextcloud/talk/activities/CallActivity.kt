@@ -12,6 +12,7 @@ import android.Manifest
 import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.app.PendingIntent
 import android.app.RemoteAction
 import android.content.BroadcastReceiver
@@ -3492,9 +3493,11 @@ class CallActivity : CallBaseActivity() {
             val intent = Intent(context, CallActivity::class.java)
             intent.addFlags(
                 Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
-                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
             )
+            if (context !is Activity) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
             extras?.let { intent.putExtras(Bundle(it)) }
             return intent
         }
