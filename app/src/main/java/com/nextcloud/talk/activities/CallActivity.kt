@@ -623,9 +623,9 @@ class CallActivity : CallBaseActivity() {
         }
     }
 
-    override fun onNewIntent(intent: Intent?) {
+    override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        intent?.let { setIntent(it) }
+        setIntent(intent)
     }
 
     override fun onStop() {
