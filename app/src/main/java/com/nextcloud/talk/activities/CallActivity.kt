@@ -2291,7 +2291,7 @@ class CallActivity : CallBaseActivity() {
                 } else {
                     Log.d(TAG, "   inCallFlag of aggregated self: $inCallFlag")
                 }
-                if (inCallFlag == Participant.InCallFlags.DISCONNECTED) {
+                if (inCallFlag == Participant.InCallFlags.DISCONNECTED.toLong()) {
                     if (shouldIgnoreSelfDisconnect) {
                         Log.d(TAG, "   ignoring transient self disconnect while call is active")
                         isSelfInCall = true
