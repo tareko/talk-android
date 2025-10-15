@@ -98,7 +98,7 @@ public abstract class CallBaseActivity extends BaseActivity {
     @Override
     public void onStop() {
         super.onStop();
-        if (shouldFinishOnStop()) {
+        if (shouldFinishOnStop() && !shouldKeepActivityRunningOnStop()) {
             finish();
         }
     }
@@ -155,6 +155,10 @@ public abstract class CallBaseActivity extends BaseActivity {
             //noinspection deprecation
             return powerManager.isScreenOn();
         }
+    }
+
+    protected boolean shouldKeepActivityRunningOnStop() {
+        return false;
     }
 
     public abstract void updateUiForPipMode();

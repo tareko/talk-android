@@ -618,6 +618,10 @@ class CallActivity : CallBaseActivity() {
         }
     }
 
+    protected override fun shouldKeepActivityRunningOnStop(): Boolean {
+        return currentCallStatus !== CallStatus.LEAVING && !isFinishing
+    }
+
     private fun stopMicInputDetection() {
         if (micInputAudioRecordThread != null) {
             micInputAudioRecorder.stop()
