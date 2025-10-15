@@ -2228,17 +2228,29 @@ class CallActivity : CallBaseActivity() {
 
         var isSelfInCall = false
         var selfParticipant: Participant? = null
+        val currentUserId = conversationUser.userId
 
         for (participant in participantsInCall) {
             val inCallFlag = participant.inCall
             val participantSessionId = participant.sessionId
             val matchesCurrentSession = participantSessionId == currentSessionId ||
                 participant.sessionIds.contains(currentSessionId)
+            val matchesCurrentUser = !currentUserId.isNullOrEmpty() &&
+                currentUserId != "?" &&
+                participant.calculatedActorId == currentUserId
 
-            if (matchesCurrentSession) {
-                Log.d(TAG, "   inCallFlag of currentSessionId: $inCallFlag")
-                isSelfInCall = inCallFlag != 0L
-                selfParticipant = participant
+            if (matchesCurrentSession || matchesCurrentUser) {
+                if (matchesCurrentSession) {
+                    Log.d(TAG, "   inCallFlag of currentSessionId: $inCallFlag")
+                } else {
+                    Log.d(TAG, "   inCallFlag of aggregated self: $inCallFlag")
+                }
+                if (inCallFlag != 0L) {
+                    isSelfInCall = true
+                }
+                if (matchesCurrentSession || selfParticipant == null) {
+                    selfParticipant = participant
+                }
             } else if (participantSessionId != null) {
                 Log.d(
                     TAG,
