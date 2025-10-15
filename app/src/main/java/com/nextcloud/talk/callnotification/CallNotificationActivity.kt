@@ -8,7 +8,6 @@
 package com.nextcloud.talk.callnotification
 
 import android.annotation.SuppressLint
-import android.content.Intent
 import android.content.res.Configuration
 import android.os.Bundle
 import android.os.Handler
@@ -190,10 +189,8 @@ class CallNotificationActivity : CallBaseActivity() {
     }
 
     private fun proceedToCall() {
-        val callIntent = Intent(this, CallActivity::class.java)
         intent.putExtra(KEY_ROOM_ONE_TO_ONE, isOneToOneCall)
-        callIntent.putExtras(intent.extras!!)
-        startActivity(callIntent)
+        CallActivity.show(this, intent.extras)
     }
 
     private fun isInCallWithVideo(callFlag: Int): Boolean = (callFlag and Participant.InCallFlags.WITH_VIDEO) > 0
