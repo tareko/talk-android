@@ -237,11 +237,11 @@ public class CallParticipantList {
             return null;
         }
 
-        private String buildActorKey(String actorType, String actorId) {
+        private String buildActorKey(Participant.ActorType actorType, String actorId) {
             if (actorType == null || actorId == null) {
                 return null;
             }
-            return actorType + ":" + actorId;
+            return actorType.name() + ":" + actorId;
         }
 
         private String buildUserKey(String userId) {
