@@ -79,10 +79,23 @@ public class CallParticipantList {
                     callParticipants.put(sessionId, participantCopy);
                     joined.add(copyParticipant(participant));
                 } else if (knownCallParticipant && participant.getInCall() == Participant.InCallFlags.DISCONNECTED) {
-                    callParticipants.remove(sessionId);
-                    // No need to copy it, as it will be no longer used.
-                    callParticipant.setInCall(Participant.InCallFlags.DISCONNECTED);
-                    left.add(callParticipant);
+                    Participant aggregated = aggregatedSessions.get(sessionId);
+                    if (aggregated != null && aggregated.getInCall() != Participant.InCallFlags.DISCONNECTED) {
+                        long aggregatedInCall = aggregated.getInCall();
+                        boolean inCallChanged = callParticipant.getInCall() != aggregatedInCall;
+                        callParticipant.setInCall(aggregatedInCall);
+                        callParticipant.setSessionIds(copySessionIds(aggregated));
+                        if (inCallChanged) {
+                            updated.add(copyParticipant(callParticipant));
+                        } else {
+                            unchanged.add(copyParticipant(callParticipant));
+                        }
+                    } else {
+                        callParticipants.remove(sessionId);
+                        // No need to copy it, as it will be no longer used.
+                        callParticipant.setInCall(Participant.InCallFlags.DISCONNECTED);
+                        left.add(callParticipant);
+                    }
                 } else if (knownCallParticipant && callParticipant.getInCall() != participant.getInCall()) {
                     callParticipant.setInCall(participant.getInCall());
                     callParticipant.setSessionIds(copySessionIds(participant));
