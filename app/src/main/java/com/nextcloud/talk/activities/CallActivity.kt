@@ -12,6 +12,8 @@ import android.Manifest
 import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.annotation.SuppressLint
+import android.app.Activity
+import android.app.ActivityManager
 import android.app.PendingIntent
 import android.app.RemoteAction
 import android.content.BroadcastReceiver
@@ -180,6 +182,7 @@ import org.webrtc.VideoCapturer
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 import java.io.IOException
+import java.lang.ref.WeakReference
 import java.util.Objects
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -371,6 +374,12 @@ class CallActivity : CallBaseActivity() {
     )
 
     private var recordingConsentGiven = false
+    private var hasRequestedCallTeardown = false
+    private var hasStoppedForegroundService = false
+    private var hasInitializedSelfRenderer = false
+    private var hasInitializedPipRenderer = false
+    private var isSelfRendererSinkAttached = false
+    private var isPipRendererSinkAttached = false
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -381,6 +390,13 @@ class CallActivity : CallBaseActivity() {
         rootEglBase = EglBase.create()
         binding = CallActivityBinding.inflate(layoutInflater)
         setContentView(binding!!.root)
+        currentInstanceRef = WeakReference(this)
+        hasRequestedCallTeardown = false
+        hasStoppedForegroundService = false
+        hasInitializedSelfRenderer = false
+        hasInitializedPipRenderer = false
+        isSelfRendererSinkAttached = false
+        isPipRendererSinkAttached = false
         hideNavigationIfNoPipAvailable()
         processExtras(intent.extras!!)
         CallForegroundService.start(applicationContext, conversationName, intent.extras)
@@ -597,6 +613,7 @@ class CallActivity : CallBaseActivity() {
 
     override fun onStart() {
         super.onStart()
+        currentInstanceRef = WeakReference(this)
         active = true
         initFeaturesVisibility()
         try {
@@ -604,6 +621,11 @@ class CallActivity : CallBaseActivity() {
         } catch (e: IOException) {
             Log.e(TAG, "Failed to evict cache")
         }
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        intent?.let { setIntent(it) }
     }
 
     override fun onStop() {
@@ -926,19 +948,69 @@ class CallActivity : CallBaseActivity() {
 
     @SuppressLint("ClickableViewAccessibility")
     private fun initSelfVideoViewForNormalMode() {
-        try {
-            binding!!.selfVideoRenderer.init(rootEglBase!!.eglBaseContext, null)
-        } catch (e: IllegalStateException) {
-            Log.d(TAG, "selfVideoRenderer already initialized", e)
-        }
-        binding!!.selfVideoRenderer.setZOrderMediaOverlay(true)
-        // disabled because it causes some devices to crash
-        binding!!.selfVideoRenderer.setEnableHardwareScaler(false)
-        binding!!.selfVideoRenderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+        ensureSelfVideoRendererInitialized()
         binding!!.selfVideoRenderer.setOnTouchListener(SelfVideoTouchListener())
+        detachPipVideoRenderer()
+        attachSelfVideoRenderer()
+    }
 
+    private fun ensureSelfVideoRendererInitialized() {
+        if (!hasInitializedSelfRenderer) {
+            try {
+                binding!!.selfVideoRenderer.init(rootEglBase!!.eglBaseContext, null)
+            } catch (e: IllegalStateException) {
+                Log.d(TAG, "selfVideoRenderer already initialized", e)
+            }
+            binding!!.selfVideoRenderer.setZOrderMediaOverlay(true)
+            // disabled because it causes some devices to crash
+            binding!!.selfVideoRenderer.setEnableHardwareScaler(false)
+            binding!!.selfVideoRenderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+            hasInitializedSelfRenderer = true
+        }
+    }
+
+    private fun ensurePipVideoRendererInitialized() {
+        if (!hasInitializedPipRenderer) {
+            try {
+                binding!!.pipSelfVideoRenderer.init(rootEglBase!!.eglBaseContext, null)
+            } catch (e: IllegalStateException) {
+                Log.d(TAG, "pipSelfVideoRenderer already initialized", e)
+            }
+            binding!!.pipSelfVideoRenderer.setZOrderMediaOverlay(true)
+            // disabled because it causes some devices to crash
+            binding!!.pipSelfVideoRenderer.setEnableHardwareScaler(false)
+            binding!!.pipSelfVideoRenderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+            hasInitializedPipRenderer = true
+        }
+    }
+
+    private fun detachSelfVideoRenderer() {
+        if (isSelfRendererSinkAttached) {
+            localVideoTrack?.removeSink(binding!!.selfVideoRenderer)
+            isSelfRendererSinkAttached = false
+        }
+    }
+
+    private fun attachSelfVideoRenderer() {
+        if (!isSelfRendererSinkAttached && localVideoTrack != null) {
+            localVideoTrack!!.addSink(binding!!.selfVideoRenderer)
+            isSelfRendererSinkAttached = true
+        }
+    }
+
+    private fun attachPipVideoRenderer() {
+        if (!isPipRendererSinkAttached && localVideoTrack != null) {
+            localVideoTrack!!.addSink(binding!!.pipSelfVideoRenderer)
+            isPipRendererSinkAttached = true
+        }
+    }
+
+    private fun detachPipVideoRenderer() {
+        if (isPipRendererSinkAttached) {
+            localVideoTrack?.removeSink(binding!!.pipSelfVideoRenderer)
+            isPipRendererSinkAttached = false
+        }
         binding!!.pipSelfVideoRenderer.clearImage()
-        binding!!.pipSelfVideoRenderer.release()
     }
 
     private fun initGrid() {
@@ -1113,7 +1185,8 @@ class CallActivity : CallBaseActivity() {
         localVideoTrack = peerConnectionFactory!!.createVideoTrack("NCv0", videoSource)
         localStream!!.addTrack(localVideoTrack)
         localVideoTrack!!.setEnabled(false)
-        localVideoTrack!!.addSink(binding!!.selfVideoRenderer)
+        ensureSelfVideoRendererInitialized()
+        attachSelfVideoRenderer()
         localCallParticipantModel.isVideoEnabled = false
     }
 
@@ -1326,15 +1399,15 @@ class CallActivity : CallBaseActivity() {
                 binding!!.pipSelfVideoRenderer.visibility = View.VISIBLE
 
                 initSelfVideoViewForNormalMode()
+                attachSelfVideoRenderer()
             } else {
                 binding!!.selfVideoRenderer.visibility = View.INVISIBLE
                 binding!!.pipSelfVideoRenderer.visibility = View.INVISIBLE
+                binding!!.pipOverlay.visibility = View.GONE
 
+                detachSelfVideoRenderer()
+                detachPipVideoRenderer()
                 binding!!.selfVideoRenderer.clearImage()
-                binding!!.selfVideoRenderer.release()
-
-                binding!!.pipSelfVideoRenderer.clearImage()
-                binding!!.pipSelfVideoRenderer.release()
             }
         } else {
             if (enable) {
@@ -1452,18 +1525,25 @@ class CallActivity : CallBaseActivity() {
             signalingMessageReceiver!!.removeListener(localParticipantMessageListener)
             signalingMessageReceiver!!.removeListener(offerMessageListener)
         }
-        if (localStream != null) {
-            localStream!!.dispose()
-            localStream = null
-            Log.d(TAG, "Disposed localStream")
+        if (hasRequestedCallTeardown) {
+            if (localStream != null) {
+                localStream!!.dispose()
+                localStream = null
+                Log.d(TAG, "Disposed localStream")
+            } else {
+                Log.d(TAG, "localStream is null")
+            }
+            if (!hasStoppedForegroundService) {
+                CallForegroundService.stop(applicationContext)
+                hasStoppedForegroundService = true
+            }
+            powerManagerUtils?.updatePhoneState(PowerManagerUtils.PhoneState.IDLE)
         } else {
-            Log.d(TAG, "localStream is null")
+            Log.d(TAG, "Skipping call teardown in onDestroy; call still active")
         }
-        if (currentCallStatus !== CallStatus.LEAVING) {
-            hangup(true, false)
+        if (currentInstanceRef.get() === this) {
+            currentInstanceRef = WeakReference(null)
         }
-        CallForegroundService.stop(applicationContext)
-        powerManagerUtils!!.updatePhoneState(PowerManagerUtils.PhoneState.IDLE)
         super.onDestroy()
     }
 
@@ -2033,7 +2113,9 @@ class CallActivity : CallBaseActivity() {
     private fun hangup(shutDownView: Boolean, endCallForAll: Boolean) {
         Log.d(TAG, "hangup! shutDownView=$shutDownView")
         if (shutDownView) {
+            hasRequestedCallTeardown = true
             setCallState(CallStatus.LEAVING)
+            powerManagerUtils?.updatePhoneState(PowerManagerUtils.PhoneState.IDLE)
         }
         stopCallingSound()
         callTimeHandler.removeCallbacksAndMessages(null)
@@ -2061,6 +2143,10 @@ class CallActivity : CallBaseActivity() {
         ApplicationWideCurrentRoomHolder.getInstance().isInCall = false
         ApplicationWideCurrentRoomHolder.getInstance().isDialing = false
         hangupNetworkCalls(shutDownView, endCallForAll)
+        if (shutDownView && !hasStoppedForegroundService) {
+            CallForegroundService.stop(applicationContext)
+            hasStoppedForegroundService = true
+        }
     }
 
     private fun terminateAudioVideo() {
@@ -2073,11 +2159,14 @@ class CallActivity : CallBaseActivity() {
             videoCapturer!!.dispose()
             videoCapturer = null
         }
+        detachSelfVideoRenderer()
+        detachPipVideoRenderer()
         binding!!.selfVideoRenderer.clearImage()
         binding!!.selfVideoRenderer.release()
-
         binding!!.pipSelfVideoRenderer.clearImage()
         binding!!.pipSelfVideoRenderer.release()
+        hasInitializedSelfRenderer = false
+        hasInitializedPipRenderer = false
         if (audioSource != null) {
             audioSource!!.dispose()
             audioSource = null
@@ -2096,6 +2185,8 @@ class CallActivity : CallBaseActivity() {
         }
         localAudioTrack = null
         localVideoTrack = null
+        isSelfRendererSinkAttached = false
+        isPipRendererSinkAttached = false
         if (TextUtils.isEmpty(credentials) && hasExternalSignalingServer) {
             WebSocketConnectionHelper.deleteExternalSignalingInstanceForUserEntity(-1)
         }
@@ -3198,8 +3289,8 @@ class CallActivity : CallBaseActivity() {
         binding!!.callStates.callStateRelativeLayout.visibility = View.GONE
         binding!!.pipCallConversationNameTextView.text = conversationName
 
+        detachSelfVideoRenderer()
         binding!!.selfVideoRenderer.clearImage()
-        binding!!.selfVideoRenderer.release()
 
         if (participantItems.size == 1) {
             binding!!.pipOverlay.visibility = View.GONE
@@ -3209,18 +3300,8 @@ class CallActivity : CallBaseActivity() {
             if (localVideoTrack?.enabled() == true) {
                 binding!!.pipOverlay.visibility = View.VISIBLE
                 binding!!.pipSelfVideoRenderer.visibility = View.VISIBLE
-
-                try {
-                    binding!!.pipSelfVideoRenderer.init(rootEglBase!!.eglBaseContext, null)
-                } catch (e: IllegalStateException) {
-                    Log.d(TAG, "pipGroupVideoRenderer already initialized", e)
-                }
-                binding!!.pipSelfVideoRenderer.setZOrderMediaOverlay(true)
-                // disabled because it causes some devices to crash
-                binding!!.pipSelfVideoRenderer.setEnableHardwareScaler(false)
-                binding!!.pipSelfVideoRenderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
-
-                localVideoTrack?.addSink(binding?.pipSelfVideoRenderer)
+                ensurePipVideoRendererInitialized()
+                attachPipVideoRenderer()
             } else {
                 binding!!.pipOverlay.visibility = View.VISIBLE
                 binding!!.pipSelfVideoRenderer.visibility = View.GONE
@@ -3283,6 +3364,57 @@ class CallActivity : CallBaseActivity() {
 
     companion object {
         var active = false
+
+        private var currentInstanceRef: WeakReference<CallActivity?> = WeakReference(null)
+
+        @JvmStatic
+        fun show(context: Context, extras: Bundle? = null) {
+            val extrasCopy = extras?.let { Bundle(it) }
+            val existing = currentInstanceRef.get()
+            if (existing != null && !existing.isFinishing) {
+                existing.runOnUiThread {
+                    if (!existing.isFinishing && !existing.isDestroyed) {
+                        extrasCopy?.let { existing.updateIntentExtras(it) }
+                        bringTaskToFront(existing)
+                    } else {
+                        context.startActivity(createLaunchIntent(context, extrasCopy))
+                    }
+                }
+                return
+            }
+            context.startActivity(createLaunchIntent(context, extrasCopy))
+        }
+
+        @JvmStatic
+        fun createLaunchIntent(context: Context, extras: Bundle? = null): Intent {
+            val intent = Intent(context, CallActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                if (context !is Activity) {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                extras?.let { putExtras(Bundle(it)) }
+            }
+            return intent
+        }
+
+        private fun bringTaskToFront(activity: CallActivity) {
+            val activityManager = activity.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            if (activityManager != null) {
+                try {
+                    activityManager.moveTaskToFront(activity.taskId, 0)
+                    return
+                } catch (securityException: SecurityException) {
+                    Log.w(TAG, "Unable to move call task to front", securityException)
+                }
+            }
+            activity.startActivity(createLaunchIntent(activity))
+        }
+
+        private fun CallActivity.updateIntentExtras(extras: Bundle) {
+            val updatedIntent = Intent(intent)
+            updatedIntent.putExtras(extras)
+            setIntent(updatedIntent)
+        }
 
         // const val VIDEO_STREAM_TYPE_SCREEN = "screen"
         const val VIDEO_STREAM_TYPE_VIDEO = "video"

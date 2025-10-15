@@ -19,8 +19,8 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE
 import androidx.core.content.ContextCompat
 import com.nextcloud.talk.R
-import com.nextcloud.talk.activities.CallActivity
 import com.nextcloud.talk.application.NextcloudTalkApplication
+import com.nextcloud.talk.receivers.ReturnToCallReceiver
 import com.nextcloud.talk.utils.NotificationUtils
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_CALL_VOICE_ONLY
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_PARTICIPANT_PERMISSION_CAN_PUBLISH_VIDEO
@@ -80,13 +80,7 @@ class CallForegroundService : Service() {
     }
 
     private fun createContentIntent(callExtras: Bundle?): PendingIntent {
-        val intent = Intent(this, CallActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            callExtras?.let { putExtras(Bundle(it)) }
-        }
-
-        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        return PendingIntent.getActivity(this, 0, intent, flags)
+        return ReturnToCallReceiver.createPendingIntent(this, callExtras)
     }
 
     private fun resolveForegroundServiceType(callExtras: Bundle?): Int {
