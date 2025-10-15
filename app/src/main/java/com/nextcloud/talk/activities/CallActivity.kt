@@ -2228,16 +2228,32 @@ class CallActivity : CallBaseActivity() {
 
         var isSelfInCall = false
         var selfParticipant: Participant? = null
-        val currentUserId = conversationUser.userId
+        val currentUserIdentifiers = mutableSetOf<String>()
+        val userId = conversationUser.userId
+        if (!userId.isNullOrEmpty() && userId != "?") {
+            currentUserIdentifiers.add(userId)
+        }
+        val username = conversationUser.username
+        if (!username.isNullOrEmpty()) {
+            currentUserIdentifiers.add(username)
+        }
+        val numericId = conversationUser.id?.toString()
+        if (!numericId.isNullOrEmpty()) {
+            currentUserIdentifiers.add(numericId)
+        }
 
         for (participant in participantsInCall) {
             val inCallFlag = participant.inCall
             val participantSessionId = participant.sessionId
-            val matchesCurrentSession = participantSessionId == currentSessionId ||
-                participant.sessionIds.contains(currentSessionId)
-            val matchesCurrentUser = !currentUserId.isNullOrEmpty() &&
-                currentUserId != "?" &&
-                participant.calculatedActorId == currentUserId
+            val matchesCurrentSession = currentSessionId != null && (
+                participantSessionId == currentSessionId ||
+                    participant.sessionIds.any { it == currentSessionId }
+                )
+            val matchesCurrentUser = currentUserIdentifiers.any { identifier ->
+                identifier == participant.calculatedActorId ||
+                    identifier == participant.actorId ||
+                    identifier == participant.userId
+            }
 
             if (matchesCurrentSession || matchesCurrentUser) {
                 if (matchesCurrentSession) {
