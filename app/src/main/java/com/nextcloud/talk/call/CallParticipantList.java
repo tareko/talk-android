@@ -101,7 +101,7 @@ public class CallParticipantList {
                 Participant aggregated = aggregatedSessions.get(callParticipant.getSessionId());
                 if (aggregated != null && aggregated.getInCall() != Participant.InCallFlags.DISCONNECTED) {
                     knownCallParticipantsNotFound.remove(callParticipant);
-                    int aggregatedInCall = aggregated.getInCall();
+                    long aggregatedInCall = aggregated.getInCall();
                     boolean inCallChanged = callParticipant.getInCall() != aggregatedInCall;
                     callParticipant.setInCall(aggregatedInCall);
                     callParticipant.setSessionIds(copySessionIds(aggregated));
