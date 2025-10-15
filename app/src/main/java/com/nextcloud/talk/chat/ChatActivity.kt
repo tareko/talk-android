@@ -3733,16 +3733,16 @@ class ChatActivity :
                     Snackbar.make(binding.root, R.string.startCallForbidden, Snackbar.LENGTH_LONG).show()
                 } else {
                     ApplicationWideCurrentRoomHolder.getInstance().isDialing = true
-                    val callIntent = getIntentForCall(isVoiceOnlyCall, callWithoutNotification)
-                    if (callIntent != null) {
-                        startActivity(callIntent)
+                    val callExtras = buildExtrasForCall(isVoiceOnlyCall, callWithoutNotification)
+                    if (callExtras != null) {
+                        CallActivity.show(this, callExtras)
                     }
                 }
             }
         }
     }
 
-    private fun getIntentForCall(isVoiceOnlyCall: Boolean, callWithoutNotification: Boolean): Intent? {
+    private fun buildExtrasForCall(isVoiceOnlyCall: Boolean, callWithoutNotification: Boolean): Bundle? {
         currentConversation?.let {
             val bundle = Bundle()
             bundle.putString(KEY_ROOM_TOKEN, roomToken)
@@ -3772,7 +3772,7 @@ class ChatActivity :
                 bundle.putBoolean(KEY_IS_BREAKOUT_ROOM, true)
             }
 
-            return CallActivity.createLaunchIntent(this, bundle)
+            return bundle
         } ?: run {
             return null
         }

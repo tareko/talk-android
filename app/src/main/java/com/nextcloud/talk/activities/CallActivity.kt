@@ -3504,6 +3504,25 @@ class CallActivity : CallBaseActivity() {
             extras?.let { intent.putExtras(Bundle(it)) }
             return intent
         }
+
+        fun show(context: Context, extras: Bundle?) {
+            val existing = currentInstance.get()
+            if (existing != null &&
+                !existing.isFinishing &&
+                !(Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && existing.isDestroyed)
+            ) {
+                existing.runOnUiThread {
+                    val reorderIntent = Intent(existing, CallActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                        extras?.let { putExtras(Bundle(it)) }
+                    }
+                    existing.startActivity(reorderIntent)
+                }
+            } else {
+                val launchIntent = createLaunchIntent(context, extras)
+                context.startActivity(launchIntent)
+            }
+        }
         private const val SELFVIDEO_WIDTH_16_TO_9_RATIO = 136
         private const val SELFVIDEO_HEIGHT_16_TO_9_RATIO = 80
 

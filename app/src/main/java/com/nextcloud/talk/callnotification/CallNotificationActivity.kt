@@ -191,8 +191,7 @@ class CallNotificationActivity : CallBaseActivity() {
 
     private fun proceedToCall() {
         intent.putExtra(KEY_ROOM_ONE_TO_ONE, isOneToOneCall)
-        val callIntent = CallActivity.createLaunchIntent(this, intent.extras)
-        startActivity(callIntent)
+        CallActivity.show(this, intent.extras)
     }
 
     private fun isInCallWithVideo(callFlag: Int): Boolean = (callFlag and Participant.InCallFlags.WITH_VIDEO) > 0

@@ -86,9 +86,12 @@ class CallForegroundService : Service() {
     }
 
     private fun createContentIntent(callExtras: Bundle?): PendingIntent {
-        val intent = CallActivity.createLaunchIntent(this, callExtras)
+        val intent = Intent(this, CallNotificationActionReceiver::class.java).apply {
+            action = CallNotificationActionReceiver.ACTION_SHOW_CALL
+            putExtra(CallNotificationActionReceiver.EXTRA_CALL_EXTRAS, callExtras?.let { Bundle(it) })
+        }
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        return PendingIntent.getActivity(this, 0, intent, flags)
+        return PendingIntent.getBroadcast(this, 0, intent, flags)
     }
 
     private fun createLeaveMeetingPendingIntent(): PendingIntent {
