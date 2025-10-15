@@ -86,7 +86,7 @@ public class CallParticipantList {
 
             for (Participant participant : participants) {
                 String sessionId = participant.getSessionId();
-                Participant callParticipant = callParticipants.get(sessionId);
+                Participant callParticipant = sessionId != null ? callParticipants.get(sessionId) : null;
                 boolean aliasMatch = false;
 
                 if (callParticipant == null) {
@@ -117,12 +117,14 @@ public class CallParticipantList {
                 }
 
                 boolean knownCallParticipant = callParticipant != null;
-                if (!knownCallParticipant && participant.getInCall() != Participant.InCallFlags.DISCONNECTED) {
+                if (!knownCallParticipant && participant.getInCall() != Participant.InCallFlags.DISCONNECTED
+                        && sessionId != null) {
                     Participant participantCopy = copyParticipant(participant);
                     callParticipants.put(sessionId, participantCopy);
                     joined.add(copyParticipant(participant));
                 } else if (!knownCallParticipant) {
-                    // Ignore disconnect updates for unknown participants.
+                    // Ignore updates we cannot attribute to a known participant; wait for explicit disconnects.
+                    continue;
                 } else if (!aliasMatch && participant.getInCall() == Participant.InCallFlags.DISCONNECTED) {
                     callParticipants.remove(callParticipant.getSessionId());
                     // No need to copy it, as it will be no longer used.
@@ -134,6 +136,11 @@ public class CallParticipantList {
                     callParticipant.setSessionIds(copySessionIds(participant));
                     callParticipant.setDisplayName(participant.getDisplayName());
                 } else {
+                    if (aliasMatch && sessionId != null && !sessionId.equals(callParticipant.getSessionId())) {
+                        callParticipants.remove(callParticipant.getSessionId());
+                        callParticipant.setSessionId(sessionId);
+                        callParticipants.put(sessionId, callParticipant);
+                    }
                     long incomingInCall = participant.getInCall();
                     boolean inCallChanged = callParticipant.getInCall() != incomingInCall;
                     callParticipant.setInCall(incomingInCall);

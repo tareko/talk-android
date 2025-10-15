@@ -362,6 +362,7 @@ class CallActivity : CallBaseActivity() {
     private var isModerator = false
     private var reactionAnimator: ReactionAnimator? = null
     private var isSelfVideoRendererInitialized = false
+    private var isPipSelfVideoRendererInitialized = false
     private var othersInCall = false
     private var isOneToOneConversation = false
 
@@ -937,7 +938,11 @@ class CallActivity : CallBaseActivity() {
     @SuppressLint("ClickableViewAccessibility")
     private fun initSelfVideoViewForNormalMode() {
         if (!isSelfVideoRendererInitialized) {
-            binding!!.selfVideoRenderer.init(rootEglBase!!.eglBaseContext, null)
+            try {
+                binding!!.selfVideoRenderer.init(rootEglBase!!.eglBaseContext, null)
+            } catch (e: IllegalStateException) {
+                Log.d(TAG, "selfVideoRenderer already initialized", e)
+            }
             isSelfVideoRendererInitialized = true
         }
         binding!!.selfVideoRenderer.setZOrderMediaOverlay(true)
@@ -946,8 +951,7 @@ class CallActivity : CallBaseActivity() {
         binding!!.selfVideoRenderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
         binding!!.selfVideoRenderer.setOnTouchListener(SelfVideoTouchListener())
 
-        binding!!.pipSelfVideoRenderer.clearImage()
-        binding!!.pipSelfVideoRenderer.release()
+        releasePipSelfVideoRenderer()
     }
 
     private fun initGrid() {
@@ -1341,9 +1345,9 @@ class CallActivity : CallBaseActivity() {
 
                 binding!!.selfVideoRenderer.clearImage()
                 binding!!.selfVideoRenderer.release()
+                isSelfVideoRendererInitialized = false
 
-                binding!!.pipSelfVideoRenderer.clearImage()
-                binding!!.pipSelfVideoRenderer.release()
+                releasePipSelfVideoRenderer()
             }
         } else {
             if (enable) {
@@ -1476,6 +1480,16 @@ class CallActivity : CallBaseActivity() {
             localStream = null
             Log.d(TAG, "Disposed localStream")
         }
+    }
+
+    private fun releasePipSelfVideoRenderer() {
+        val renderer = binding?.pipSelfVideoRenderer
+        if (renderer != null) {
+            localVideoTrack?.removeSink(renderer)
+            renderer.clearImage()
+            renderer.release()
+        }
+        isPipSelfVideoRendererInitialized = false
     }
 
     private fun fetchSignalingSettings() {
@@ -1966,6 +1980,8 @@ class CallActivity : CallBaseActivity() {
                     if (!webSocketCommunicationEvent.getHashMap()!!.containsKey("oldResumeId")) {
                         if (currentCallStatus === CallStatus.RECONNECTING) {
                             hangup(false, false)
+                        } else if (isConnectionEstablished) {
+                            Log.d(TAG, "WebSocket hello received while call is active; skipping rejoin")
                         } else {
                             setCallState(CallStatus.RECONNECTING)
                             runOnUiThread { initiateCall() }
@@ -2103,8 +2119,7 @@ class CallActivity : CallBaseActivity() {
         binding!!.selfVideoRenderer.release()
         isSelfVideoRendererInitialized = false
 
-        binding!!.pipSelfVideoRenderer.clearImage()
-        binding!!.pipSelfVideoRenderer.release()
+        releasePipSelfVideoRenderer()
         if (audioSource != null) {
             audioSource!!.dispose()
             audioSource = null
@@ -3313,6 +3328,7 @@ class CallActivity : CallBaseActivity() {
 
         binding!!.selfVideoRenderer.clearImage()
         binding!!.selfVideoRenderer.release()
+        isSelfVideoRendererInitialized = false
 
         if (participantItems.size == 1) {
             binding!!.pipOverlay.visibility = View.GONE
@@ -3323,20 +3339,29 @@ class CallActivity : CallBaseActivity() {
                 binding!!.pipOverlay.visibility = View.VISIBLE
                 binding!!.pipSelfVideoRenderer.visibility = View.VISIBLE
 
-                try {
-                    binding!!.pipSelfVideoRenderer.init(rootEglBase!!.eglBaseContext, null)
-                } catch (e: IllegalStateException) {
-                    Log.d(TAG, "pipGroupVideoRenderer already initialized", e)
+                if (!isPipSelfVideoRendererInitialized) {
+                    try {
+                        binding!!.pipSelfVideoRenderer.init(rootEglBase!!.eglBaseContext, null)
+                        isPipSelfVideoRendererInitialized = true
+                    } catch (e: IllegalStateException) {
+                        Log.d(TAG, "pipGroupVideoRenderer already initialized", e)
+                        isPipSelfVideoRendererInitialized = true
+                    }
                 }
                 binding!!.pipSelfVideoRenderer.setZOrderMediaOverlay(true)
                 // disabled because it causes some devices to crash
                 binding!!.pipSelfVideoRenderer.setEnableHardwareScaler(false)
                 binding!!.pipSelfVideoRenderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
 
-                localVideoTrack?.addSink(binding?.pipSelfVideoRenderer)
+                val renderer = binding?.pipSelfVideoRenderer
+                if (renderer != null) {
+                    localVideoTrack?.removeSink(renderer)
+                    localVideoTrack?.addSink(renderer)
+                }
             } else {
                 binding!!.pipOverlay.visibility = View.VISIBLE
                 binding!!.pipSelfVideoRenderer.visibility = View.GONE
+                releasePipSelfVideoRenderer()
             }
         }
     }
