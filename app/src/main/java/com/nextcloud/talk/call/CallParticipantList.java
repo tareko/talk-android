@@ -41,15 +41,15 @@ public class CallParticipantList {
 
         @Override
         public void onUsersInRoom(List<Participant> participants) {
-            processParticipantList(participants);
+            processParticipantList(participants, true);
         }
 
         @Override
         public void onParticipantsUpdate(List<Participant> participants) {
-            processParticipantList(participants);
+            processParticipantList(participants, false);
         }
 
-        private void processParticipantList(List<Participant> participants) {
+        private void processParticipantList(List<Participant> participants, boolean isFullList) {
             Collection<Participant> joined = new ArrayList<>();
             Collection<Participant> updated = new ArrayList<>();
             Collection<Participant> left = new ArrayList<>();
@@ -152,12 +152,16 @@ public class CallParticipantList {
                 }
             }
 
-            for (Participant callParticipant : knownCallParticipantsNotFound) {
-                callParticipants.remove(callParticipant.getSessionId());
-                // No need to copy it, as it will be no longer used.
-                callParticipant.setInCall(Participant.InCallFlags.DISCONNECTED);
+            if (isFullList) {
+                // Incremental updates only include the changed participants; keep the existing snapshot when they
+                // are missing and rely on explicit DISCONNECTED flags to signal that someone left the call.
+                for (Participant callParticipant : knownCallParticipantsNotFound) {
+                    callParticipants.remove(callParticipant.getSessionId());
+                    // No need to copy it, as it will be no longer used.
+                    callParticipant.setInCall(Participant.InCallFlags.DISCONNECTED);
+                }
+                left.addAll(knownCallParticipantsNotFound);
             }
-            left.addAll(knownCallParticipantsNotFound);
 
             if (!joined.isEmpty() || !updated.isEmpty() || !left.isEmpty()) {
                 callParticipantListNotifier.notifyChanged(joined, updated, left, unchanged);
