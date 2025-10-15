@@ -12,6 +12,7 @@ import android.Manifest
 import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.app.PendingIntent
 import android.app.RemoteAction
 import android.content.BroadcastReceiver
@@ -180,6 +181,7 @@ import org.webrtc.VideoCapturer
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 import java.io.IOException
+import java.lang.ref.WeakReference
 import java.util.Objects
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -266,6 +268,7 @@ class CallActivity : CallBaseActivity() {
     private val screenParticipantDisplayItemManagersHandler = Handler(Looper.getMainLooper())
     private val callParticipantEventDisplayers: MutableMap<String?, CallParticipantEventDisplayer> = HashMap()
     private val callParticipantEventDisplayersHandler = Handler(Looper.getMainLooper())
+    private var lastSelfParticipantSnapshot: Participant? = null
     private val callParticipantListObserver: CallParticipantList.Observer = object : CallParticipantList.Observer {
         override fun onCallParticipantsChanged(
             joined: Collection<Participant>,
@@ -302,6 +305,7 @@ class CallActivity : CallBaseActivity() {
     private var hasExternalSignalingServer = false
     private var conversationPassword: String? = null
     private var powerManagerUtils: PowerManagerUtils? = null
+    private var tearingDownCall = false
     private var handler: Handler? = null
     private var currentCallStatus: CallStatus? = null
     private var mediaPlayer: MediaPlayer? = null
@@ -358,6 +362,8 @@ class CallActivity : CallBaseActivity() {
     private var canPublishVideoStream = false
     private var isModerator = false
     private var reactionAnimator: ReactionAnimator? = null
+    private var isSelfVideoRendererInitialized = false
+    private var isPipSelfVideoRendererInitialized = false
     private var othersInCall = false
     private var isOneToOneConversation = false
 
@@ -377,10 +383,12 @@ class CallActivity : CallBaseActivity() {
         Log.d(TAG, "onCreate")
         super.onCreate(savedInstanceState)
         sharedApplication!!.componentApplication.inject(this)
+        tearingDownCall = false
 
         rootEglBase = EglBase.create()
         binding = CallActivityBinding.inflate(layoutInflater)
         setContentView(binding!!.root)
+        currentInstance = WeakReference(this)
         hideNavigationIfNoPipAvailable()
         processExtras(intent.extras!!)
         CallForegroundService.start(applicationContext, conversationName, intent.extras)
@@ -511,6 +519,12 @@ class CallActivity : CallBaseActivity() {
         baseUrl = extras.getString(KEY_MODIFIED_BASE_URL, "")
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.extras?.let { processExtras(it) }
+    }
+
     private fun checkRecordingConsentAndInitiateCall() {
         fun askForRecordingConsent() {
             val materialAlertDialogBuilder = MaterialAlertDialogBuilder(this)
@@ -613,6 +627,10 @@ class CallActivity : CallBaseActivity() {
         if (isMicInputAudioThreadRunning) {
             stopMicInputDetection()
         }
+    }
+
+    protected override fun shouldKeepActivityRunningOnStop(): Boolean {
+        return currentCallStatus !== CallStatus.LEAVING && !isFinishing
     }
 
     private fun stopMicInputDetection() {
@@ -926,10 +944,13 @@ class CallActivity : CallBaseActivity() {
 
     @SuppressLint("ClickableViewAccessibility")
     private fun initSelfVideoViewForNormalMode() {
-        try {
-            binding!!.selfVideoRenderer.init(rootEglBase!!.eglBaseContext, null)
-        } catch (e: IllegalStateException) {
-            Log.d(TAG, "selfVideoRenderer already initialized", e)
+        if (!isSelfVideoRendererInitialized) {
+            try {
+                binding!!.selfVideoRenderer.init(rootEglBase!!.eglBaseContext, null)
+            } catch (e: IllegalStateException) {
+                Log.d(TAG, "selfVideoRenderer already initialized", e)
+            }
+            isSelfVideoRendererInitialized = true
         }
         binding!!.selfVideoRenderer.setZOrderMediaOverlay(true)
         // disabled because it causes some devices to crash
@@ -937,8 +958,7 @@ class CallActivity : CallBaseActivity() {
         binding!!.selfVideoRenderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
         binding!!.selfVideoRenderer.setOnTouchListener(SelfVideoTouchListener())
 
-        binding!!.pipSelfVideoRenderer.clearImage()
-        binding!!.pipSelfVideoRenderer.release()
+        releasePipSelfVideoRenderer()
     }
 
     private fun initGrid() {
@@ -1332,9 +1352,9 @@ class CallActivity : CallBaseActivity() {
 
                 binding!!.selfVideoRenderer.clearImage()
                 binding!!.selfVideoRenderer.release()
+                isSelfVideoRendererInitialized = false
 
-                binding!!.pipSelfVideoRenderer.clearImage()
-                binding!!.pipSelfVideoRenderer.release()
+                releasePipSelfVideoRenderer()
             }
         } else {
             if (enable) {
@@ -1452,19 +1472,31 @@ class CallActivity : CallBaseActivity() {
             signalingMessageReceiver!!.removeListener(localParticipantMessageListener)
             signalingMessageReceiver!!.removeListener(offerMessageListener)
         }
-        if (localStream != null) {
-            localStream!!.dispose()
+        if (tearingDownCall || currentCallStatus === CallStatus.LEAVING) {
+            disposeLocalStream()
+        } else if (currentCallStatus !== CallStatus.LEAVING) {
+            Log.d(TAG, "onDestroy invoked without explicit hangup; skipping teardown")
+        }
+        currentInstance = WeakReference(null)
+        super.onDestroy()
+    }
+
+    private fun disposeLocalStream() {
+        localStream?.let {
+            it.dispose()
             localStream = null
             Log.d(TAG, "Disposed localStream")
-        } else {
-            Log.d(TAG, "localStream is null")
         }
-        if (currentCallStatus !== CallStatus.LEAVING) {
-            hangup(true, false)
+    }
+
+    private fun releasePipSelfVideoRenderer() {
+        val renderer = binding?.pipSelfVideoRenderer
+        if (renderer != null) {
+            localVideoTrack?.removeSink(renderer)
+            renderer.clearImage()
+            renderer.release()
         }
-        CallForegroundService.stop(applicationContext)
-        powerManagerUtils!!.updatePhoneState(PowerManagerUtils.PhoneState.IDLE)
-        super.onDestroy()
+        isPipSelfVideoRendererInitialized = false
     }
 
     private fun fetchSignalingSettings() {
@@ -1955,6 +1987,8 @@ class CallActivity : CallBaseActivity() {
                     if (!webSocketCommunicationEvent.getHashMap()!!.containsKey("oldResumeId")) {
                         if (currentCallStatus === CallStatus.RECONNECTING) {
                             hangup(false, false)
+                        } else if (isConnectionEstablished) {
+                            Log.d(TAG, "WebSocket hello received while call is active; skipping rejoin")
                         } else {
                             setCallState(CallStatus.RECONNECTING)
                             runOnUiThread { initiateCall() }
@@ -2030,8 +2064,20 @@ class CallActivity : CallBaseActivity() {
         }
     }
 
+    private fun leaveCallFromSystemUi() {
+        if (isFinishing || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed)) {
+            return
+        }
+        val endCallForAll = isOneToOneConversation
+        hangup(shutDownView = true, endCallForAll = endCallForAll)
+    }
+
     private fun hangup(shutDownView: Boolean, endCallForAll: Boolean) {
         Log.d(TAG, "hangup! shutDownView=$shutDownView")
+        if (shutDownView) {
+            tearingDownCall = true
+        }
+        lastSelfParticipantSnapshot = null
         if (shutDownView) {
             setCallState(CallStatus.LEAVING)
         }
@@ -2041,6 +2087,9 @@ class CallActivity : CallBaseActivity() {
 
         if (shutDownView) {
             terminateAudioVideo()
+            disposeLocalStream()
+            CallForegroundService.stop(applicationContext)
+            powerManagerUtils?.updatePhoneState(PowerManagerUtils.PhoneState.IDLE)
         }
 
         val peerConnectionIdsToEnd: MutableList<String> = ArrayList(peerConnectionWrapperList.size)
@@ -2075,9 +2124,9 @@ class CallActivity : CallBaseActivity() {
         }
         binding!!.selfVideoRenderer.clearImage()
         binding!!.selfVideoRenderer.release()
+        isSelfVideoRendererInitialized = false
 
-        binding!!.pipSelfVideoRenderer.clearImage()
-        binding!!.pipSelfVideoRenderer.release()
+        releasePipSelfVideoRenderer()
         if (audioSource != null) {
             audioSource!!.dispose()
             audioSource = null
@@ -2217,21 +2266,101 @@ class CallActivity : CallBaseActivity() {
 
         var isSelfInCall = false
         var selfParticipant: Participant? = null
+        val currentUserIdentifiers = mutableSetOf<String>()
+        val userId = conversationUser.userId
+        if (!userId.isNullOrEmpty() && userId != "?") {
+            currentUserIdentifiers.add(userId)
+        }
+        val username = conversationUser.username
+        if (!username.isNullOrEmpty()) {
+            currentUserIdentifiers.add(username)
+        }
+        val numericId = conversationUser.id?.toString()
+        if (!numericId.isNullOrEmpty()) {
+            currentUserIdentifiers.add(numericId)
+        }
+
+        val matchesSelfSession: (Participant) -> Boolean = { participant ->
+            val participantSessionId = participant.sessionId
+            currentSessionId != null && (
+                participantSessionId == currentSessionId ||
+                    participant.sessionIds.any { it == currentSessionId }
+                )
+        }
+        val matchesSelfUser: (Participant) -> Boolean = { participant ->
+            currentUserIdentifiers.any { identifier ->
+                identifier == participant.calculatedActorId ||
+                    identifier == participant.actorId ||
+                    identifier == participant.userId
+            }
+        }
+        val shouldIgnoreSelfDisconnect = !tearingDownCall && currentCallStatus !== CallStatus.LEAVING
+
+        var selfWasExplicitlyRemoved = left.any { participant ->
+            matchesSelfSession(participant) ||
+                (currentSessionId == null && matchesSelfUser(participant))
+        }
 
         for (participant in participantsInCall) {
             val inCallFlag = participant.inCall
-            if (participant.sessionId != currentSessionId) {
+            val participantSessionId = participant.sessionId
+            val matchesCurrentSession = matchesSelfSession(participant)
+            val matchesCurrentUser = matchesSelfUser(participant)
+
+            if (matchesCurrentSession || matchesCurrentUser) {
+                if (matchesCurrentSession) {
+                    Log.d(TAG, "   inCallFlag of currentSessionId: $inCallFlag")
+                } else {
+                    Log.d(TAG, "   inCallFlag of aggregated self: $inCallFlag")
+                }
+                if (inCallFlag == Participant.InCallFlags.DISCONNECTED.toLong()) {
+                    if (shouldIgnoreSelfDisconnect) {
+                        Log.d(TAG, "   ignoring transient self disconnect while call is active")
+                        isSelfInCall = true
+                    }
+                } else if (inCallFlag != 0L) {
+                    isSelfInCall = true
+                }
+                if (matchesCurrentSession || selfParticipant == null) {
+                    selfParticipant = participant
+                }
+            } else if (participantSessionId != null) {
                 Log.d(
                     TAG,
                     "   inCallFlag of participant " +
-                        participant.sessionId!!.substring(0, SESSION_ID_PREFFIX_END) +
+                        participantSessionId.substring(0, SESSION_ID_PREFFIX_END) +
                         " : " +
                         inCallFlag
                 )
-            } else {
-                Log.d(TAG, "   inCallFlag of currentSessionId: $inCallFlag")
-                isSelfInCall = inCallFlag != 0L
-                selfParticipant = participant
+            }
+        }
+
+        if (isSelfInCall && selfParticipant != null) {
+            lastSelfParticipantSnapshot = selfParticipant.copy(
+                sessionIds = ArrayList(selfParticipant.sessionIds)
+            )
+        } else if (!isSelfInCall && !selfWasExplicitlyRemoved &&
+            ApplicationWideCurrentRoomHolder.getInstance().isInCall
+        ) {
+            if (selfParticipant == null) {
+                lastSelfParticipantSnapshot?.let { cachedParticipant ->
+                    selfParticipant = cachedParticipant
+                }
+            }
+            Log.d(TAG, "Self missing from participant update without disconnect notice; keeping existing call state")
+            isSelfInCall = true
+        } else if (selfWasExplicitlyRemoved && !shouldIgnoreSelfDisconnect) {
+            lastSelfParticipantSnapshot = null
+        }
+
+        if (selfWasExplicitlyRemoved && shouldIgnoreSelfDisconnect) {
+            Log.d(TAG, "Explicit self removal received while call is active; deferring hangup")
+            selfWasExplicitlyRemoved = false
+            if (!isSelfInCall) {
+                lastSelfParticipantSnapshot?.let { cachedParticipant ->
+                    selfParticipant = cachedParticipant
+                    isSelfInCall = true
+                }
             }
         }
 
@@ -2247,6 +2376,7 @@ class CallActivity : CallBaseActivity() {
         if (!isSelfInCall) {
             Log.d(TAG, "Self not in call, disconnecting from all other sessions")
             removeSessions(participantsInCall)
+            removeSessions(left)
             return
         }
         if (currentCallStatus === CallStatus.LEAVING) {
@@ -2265,7 +2395,12 @@ class CallActivity : CallBaseActivity() {
         if (othersInCall && currentCallStatus !== CallStatus.IN_CONVERSATION) {
             setCallState(CallStatus.IN_CONVERSATION)
         }
-        removeSessions(left)
+        val remoteLeft = left.filterNot { participant ->
+            matchesSelfSession(participant) || matchesSelfUser(participant)
+        }
+        if (remoteLeft.isNotEmpty()) {
+            removeSessions(remoteLeft)
+        }
     }
 
     private fun removeSessions(sessions: Collection<Participant>) {
@@ -3200,6 +3335,7 @@ class CallActivity : CallBaseActivity() {
 
         binding!!.selfVideoRenderer.clearImage()
         binding!!.selfVideoRenderer.release()
+        isSelfVideoRendererInitialized = false
 
         if (participantItems.size == 1) {
             binding!!.pipOverlay.visibility = View.GONE
@@ -3210,20 +3346,29 @@ class CallActivity : CallBaseActivity() {
                 binding!!.pipOverlay.visibility = View.VISIBLE
                 binding!!.pipSelfVideoRenderer.visibility = View.VISIBLE
 
-                try {
-                    binding!!.pipSelfVideoRenderer.init(rootEglBase!!.eglBaseContext, null)
-                } catch (e: IllegalStateException) {
-                    Log.d(TAG, "pipGroupVideoRenderer already initialized", e)
+                if (!isPipSelfVideoRendererInitialized) {
+                    try {
+                        binding!!.pipSelfVideoRenderer.init(rootEglBase!!.eglBaseContext, null)
+                        isPipSelfVideoRendererInitialized = true
+                    } catch (e: IllegalStateException) {
+                        Log.d(TAG, "pipGroupVideoRenderer already initialized", e)
+                        isPipSelfVideoRendererInitialized = true
+                    }
                 }
                 binding!!.pipSelfVideoRenderer.setZOrderMediaOverlay(true)
                 // disabled because it causes some devices to crash
                 binding!!.pipSelfVideoRenderer.setEnableHardwareScaler(false)
                 binding!!.pipSelfVideoRenderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
 
-                localVideoTrack?.addSink(binding?.pipSelfVideoRenderer)
+                val renderer = binding?.pipSelfVideoRenderer
+                if (renderer != null) {
+                    localVideoTrack?.removeSink(renderer)
+                    localVideoTrack?.addSink(renderer)
+                }
             } else {
                 binding!!.pipOverlay.visibility = View.VISIBLE
                 binding!!.pipSelfVideoRenderer.visibility = View.GONE
+                releasePipSelfVideoRenderer()
             }
         }
     }
@@ -3333,6 +3478,51 @@ class CallActivity : CallBaseActivity() {
 
         private const val SELFVIDEO_WIDTH_4_TO_3_RATIO = 80
         private const val SELFVIDEO_HEIGHT_4_TO_3_RATIO = 104
+        private var currentInstance: WeakReference<CallActivity?> = WeakReference(null)
+
+        fun requestLeaveCall(): Boolean {
+            val activity = currentInstance.get()
+            if (activity != null) {
+                activity.runOnUiThread { activity.leaveCallFromSystemUi() }
+                return true
+            }
+            return false
+        }
+
+        fun createLaunchIntent(context: Context, extras: Bundle?): Intent {
+            val intent = Intent(context, CallActivity::class.java)
+
+            if (context !is Activity) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+
+            intent.addFlags(
+                Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+            )
+
+            extras?.let { intent.putExtras(Bundle(it)) }
+            return intent
+        }
+
+        fun show(context: Context, extras: Bundle?) {
+            val existing = currentInstance.get()
+            if (existing != null &&
+                !existing.isFinishing &&
+                !(Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && existing.isDestroyed)
+            ) {
+                existing.runOnUiThread {
+                    val reorderIntent = Intent(existing, CallActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                        extras?.let { putExtras(Bundle(it)) }
+                    }
+                    existing.startActivity(reorderIntent)
+                }
+            } else {
+                val launchIntent = createLaunchIntent(context, extras)
+                context.startActivity(launchIntent)
+            }
+        }
         private const val SELFVIDEO_WIDTH_16_TO_9_RATIO = 136
         private const val SELFVIDEO_HEIGHT_16_TO_9_RATIO = 80
 

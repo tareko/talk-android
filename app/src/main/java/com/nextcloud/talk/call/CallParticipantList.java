@@ -41,40 +41,117 @@ public class CallParticipantList {
 
         @Override
         public void onUsersInRoom(List<Participant> participants) {
-            processParticipantList(participants);
+            processParticipantList(participants, true);
         }
 
         @Override
         public void onParticipantsUpdate(List<Participant> participants) {
-            processParticipantList(participants);
+            processParticipantList(participants, false);
         }
 
-        private void processParticipantList(List<Participant> participants) {
+        private void processParticipantList(List<Participant> participants, boolean isFullList) {
             Collection<Participant> joined = new ArrayList<>();
             Collection<Participant> updated = new ArrayList<>();
             Collection<Participant> left = new ArrayList<>();
             Collection<Participant> unchanged = new ArrayList<>();
 
+            Map<String, Participant> knownBySessionAlias = new HashMap<>();
+            Map<String, Participant> knownByActor = new HashMap<>();
+            Map<String, Participant> knownByUser = new HashMap<>();
+
+            // Build lookup tables so aggregated updates that reference alternate identifiers can be matched to the
+            // already tracked participant instead of being treated as brand-new joins.
+            for (Participant existingParticipant : callParticipants.values()) {
+                ArrayList<String> existingSessionIds = existingParticipant.getSessionIds();
+                if (existingSessionIds != null) {
+                    for (String existingSessionId : existingSessionIds) {
+                        if (existingSessionId != null) {
+                            knownBySessionAlias.put(existingSessionId, existingParticipant);
+                        }
+                    }
+                }
+
+                String actorKey = buildActorKey(existingParticipant.getActorType(), existingParticipant.getActorId());
+                if (actorKey != null) {
+                    knownByActor.put(actorKey, existingParticipant);
+                }
+
+                String userKey = buildUserKey(existingParticipant.getUserId());
+                if (userKey != null) {
+                    knownByUser.put(userKey, existingParticipant);
+                }
+            }
+
             Collection<Participant> knownCallParticipantsNotFound = new ArrayList<>(callParticipants.values());
 
             for (Participant participant : participants) {
                 String sessionId = participant.getSessionId();
-                Participant callParticipant = callParticipants.get(sessionId);
+                Participant callParticipant = sessionId != null ? callParticipants.get(sessionId) : null;
+                boolean aliasMatch = false;
+
+                if (callParticipant == null) {
+                    callParticipant = knownBySessionAlias.get(sessionId);
+                    if (callParticipant != null) {
+                        aliasMatch = sessionId != null && !sessionId.equals(callParticipant.getSessionId());
+                    }
+                }
+
+                if (callParticipant == null) {
+                    String actorKey = buildActorKey(participant.getActorType(), participant.getActorId());
+                    if (actorKey != null) {
+                        callParticipant = knownByActor.get(actorKey);
+                        if (callParticipant != null) {
+                            aliasMatch = sessionId != null && !sessionId.equals(callParticipant.getSessionId());
+                        }
+                    }
+                }
+
+                if (callParticipant == null) {
+                    String userKey = buildUserKey(participant.getUserId());
+                    if (userKey != null) {
+                        callParticipant = knownByUser.get(userKey);
+                        if (callParticipant != null) {
+                            aliasMatch = sessionId != null && !sessionId.equals(callParticipant.getSessionId());
+                        }
+                    }
+                }
 
                 boolean knownCallParticipant = callParticipant != null;
-                if (!knownCallParticipant && participant.getInCall() != Participant.InCallFlags.DISCONNECTED) {
-                    callParticipants.put(sessionId, copyParticipant(participant));
+                if (!knownCallParticipant && participant.getInCall() != Participant.InCallFlags.DISCONNECTED
+                        && sessionId != null) {
+                    Participant participantCopy = copyParticipant(participant);
+                    callParticipants.put(sessionId, participantCopy);
                     joined.add(copyParticipant(participant));
-                } else if (knownCallParticipant && participant.getInCall() == Participant.InCallFlags.DISCONNECTED) {
-                    callParticipants.remove(sessionId);
+                } else if (!knownCallParticipant) {
+                    // Ignore updates we cannot attribute to a known participant; wait for explicit disconnects.
+                    continue;
+                } else if (!aliasMatch && participant.getInCall() == Participant.InCallFlags.DISCONNECTED) {
+                    callParticipants.remove(callParticipant.getSessionId());
                     // No need to copy it, as it will be no longer used.
                     callParticipant.setInCall(Participant.InCallFlags.DISCONNECTED);
                     left.add(callParticipant);
-                } else if (knownCallParticipant && callParticipant.getInCall() != participant.getInCall()) {
-                    callParticipant.setInCall(participant.getInCall());
-                    updated.add(copyParticipant(participant));
-                } else if (knownCallParticipant) {
-                    unchanged.add(copyParticipant(participant));
+                } else if (aliasMatch && participant.getInCall() == Participant.InCallFlags.DISCONNECTED) {
+                    // Aggregated aliases may report DISCONNECTED for secondary sessions; keep the stored
+                    // participant untouched but refresh known identifiers.
+                    callParticipant.setSessionIds(copySessionIds(participant));
+                    callParticipant.setDisplayName(participant.getDisplayName());
+                } else {
+                    if (aliasMatch && sessionId != null && !sessionId.equals(callParticipant.getSessionId())) {
+                        callParticipants.remove(callParticipant.getSessionId());
+                        callParticipant.setSessionId(sessionId);
+                        callParticipants.put(sessionId, callParticipant);
+                    }
+                    long incomingInCall = participant.getInCall();
+                    boolean inCallChanged = callParticipant.getInCall() != incomingInCall;
+                    callParticipant.setInCall(incomingInCall);
+                    callParticipant.setSessionIds(copySessionIds(participant));
+                    callParticipant.setDisplayName(participant.getDisplayName());
+
+                    if (inCallChanged) {
+                        updated.add(copyParticipant(callParticipant));
+                    } else {
+                        unchanged.add(copyParticipant(callParticipant));
+                    }
                 }
 
                 if (knownCallParticipant) {
@@ -82,12 +159,16 @@ public class CallParticipantList {
                 }
             }
 
-            for (Participant callParticipant : knownCallParticipantsNotFound) {
-                callParticipants.remove(callParticipant.getSessionId());
-                // No need to copy it, as it will be no longer used.
-                callParticipant.setInCall(Participant.InCallFlags.DISCONNECTED);
+            if (isFullList) {
+                // Incremental updates only include the changed participants; keep the existing snapshot when they
+                // are missing and rely on explicit DISCONNECTED flags to signal that someone left the call.
+                for (Participant callParticipant : knownCallParticipantsNotFound) {
+                    callParticipants.remove(callParticipant.getSessionId());
+                    // No need to copy it, as it will be no longer used.
+                    callParticipant.setInCall(Participant.InCallFlags.DISCONNECTED);
+                }
+                left.addAll(knownCallParticipantsNotFound);
             }
-            left.addAll(knownCallParticipantsNotFound);
 
             if (!joined.isEmpty() || !updated.isEmpty() || !left.isEmpty()) {
                 callParticipantListNotifier.notifyChanged(joined, updated, left, unchanged);
@@ -128,10 +209,34 @@ public class CallParticipantList {
             copiedParticipant.setInternal(participant.getInternal());
             copiedParticipant.setLastPing(participant.getLastPing());
             copiedParticipant.setSessionId(participant.getSessionId());
+            copiedParticipant.setSessionIds(copySessionIds(participant));
             copiedParticipant.setType(participant.getType());
             copiedParticipant.setUserId(participant.getUserId());
+            copiedParticipant.setDisplayName(participant.getDisplayName());
 
             return copiedParticipant;
+        }
+
+        private ArrayList<String> copySessionIds(Participant participant) {
+            ArrayList<String> sessionIds = participant.getSessionIds();
+            if (sessionIds == null) {
+                return new ArrayList<>();
+            }
+            return new ArrayList<>(sessionIds);
+        }
+
+        private String buildActorKey(Participant.ActorType actorType, String actorId) {
+            if (actorType == null || actorId == null) {
+                return null;
+            }
+            return actorType.name() + ":" + actorId;
+        }
+
+        private String buildUserKey(String userId) {
+            if (userId == null) {
+                return null;
+            }
+            return "user:" + userId;
         }
     };
 
