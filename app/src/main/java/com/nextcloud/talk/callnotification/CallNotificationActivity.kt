@@ -190,9 +190,8 @@ class CallNotificationActivity : CallBaseActivity() {
     }
 
     private fun proceedToCall() {
-        val callIntent = Intent(this, CallActivity::class.java)
         intent.putExtra(KEY_ROOM_ONE_TO_ONE, isOneToOneCall)
-        callIntent.putExtras(intent.extras!!)
+        val callIntent = CallActivity.createLaunchIntent(this, intent.extras)
         startActivity(callIntent)
     }
 

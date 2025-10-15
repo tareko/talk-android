@@ -3772,9 +3772,7 @@ class ChatActivity :
                 bundle.putBoolean(KEY_IS_BREAKOUT_ROOM, true)
             }
 
-            val callIntent = Intent(this, CallActivity::class.java)
-            callIntent.putExtras(bundle)
-            return callIntent
+            return CallActivity.createLaunchIntent(this, bundle)
         } ?: run {
             return null
         }

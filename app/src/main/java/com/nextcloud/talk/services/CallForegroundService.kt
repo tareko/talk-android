@@ -86,11 +86,7 @@ class CallForegroundService : Service() {
     }
 
     private fun createContentIntent(callExtras: Bundle?): PendingIntent {
-        val intent = Intent(this, CallActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            callExtras?.let { putExtras(Bundle(it)) }
-        }
-
+        val intent = CallActivity.createLaunchIntent(this, callExtras)
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         return PendingIntent.getActivity(this, 0, intent, flags)
     }

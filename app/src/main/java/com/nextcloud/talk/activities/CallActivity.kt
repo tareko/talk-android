@@ -518,6 +518,15 @@ class CallActivity : CallBaseActivity() {
         baseUrl = extras.getString(KEY_MODIFIED_BASE_URL, "")
     }
 
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        if (intent == null) {
+            return
+        }
+        setIntent(intent)
+        intent.extras?.let { processExtras(it) }
+    }
+
     private fun checkRecordingConsentAndInitiateCall() {
         fun askForRecordingConsent() {
             val materialAlertDialogBuilder = MaterialAlertDialogBuilder(this)
@@ -3480,6 +3489,17 @@ class CallActivity : CallBaseActivity() {
                 return true
             }
             return false
+        }
+
+        fun createLaunchIntent(context: Context, extras: Bundle?): Intent {
+            val intent = Intent(context, CallActivity::class.java)
+            intent.addFlags(
+                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+            )
+            extras?.let { intent.putExtras(Bundle(it)) }
+            return intent
         }
         private const val SELFVIDEO_WIDTH_16_TO_9_RATIO = 136
         private const val SELFVIDEO_HEIGHT_16_TO_9_RATIO = 80
