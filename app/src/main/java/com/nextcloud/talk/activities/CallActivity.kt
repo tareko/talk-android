@@ -518,11 +518,8 @@ class CallActivity : CallBaseActivity() {
         baseUrl = extras.getString(KEY_MODIFIED_BASE_URL, "")
     }
 
-    override fun onNewIntent(intent: Intent?) {
+    override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        if (intent == null) {
-            return
-        }
         setIntent(intent)
         intent.extras?.let { processExtras(it) }
     }
