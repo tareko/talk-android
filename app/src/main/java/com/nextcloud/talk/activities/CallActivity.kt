@@ -12,6 +12,7 @@ import android.Manifest
 import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.app.PendingIntent
 import android.app.RemoteAction
 import android.content.BroadcastReceiver
@@ -308,6 +309,11 @@ class CallActivity : CallBaseActivity() {
 
     private val participantItems = mutableStateListOf<ParticipantDisplayItem>()
     private var binding: CallActivityBinding? = null
+    private var shouldTearDownOnDestroy = false
+    private var isSelfVideoRendererInitialized = false
+    private var isPipVideoRendererInitialized = false
+    private var isSelfVideoRendererAttached = false
+    private var isPipVideoRendererAttached = false
     private var audioOutputDialog: AudioOutputDialog? = null
     private var moreCallActionsDialog: MoreCallActionsDialog? = null
     private var elapsedSeconds: Long = 0
@@ -384,6 +390,7 @@ class CallActivity : CallBaseActivity() {
         hideNavigationIfNoPipAvailable()
         processExtras(intent.extras!!)
         CallForegroundService.start(applicationContext, conversationName, intent.extras)
+        runningInstance = this
 
         conversationUser = currentUserProvider.currentUser.blockingGet()
 
@@ -604,6 +611,11 @@ class CallActivity : CallBaseActivity() {
         } catch (e: IOException) {
             Log.e(TAG, "Failed to evict cache")
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
     }
 
     override fun onStop() {
@@ -924,21 +936,119 @@ class CallActivity : CallBaseActivity() {
         binding!!.composeParticipantGrid.z = 0f
     }
 
-    @SuppressLint("ClickableViewAccessibility")
-    private fun initSelfVideoViewForNormalMode() {
-        try {
-            binding!!.selfVideoRenderer.init(rootEglBase!!.eglBaseContext, null)
-        } catch (e: IllegalStateException) {
-            Log.d(TAG, "selfVideoRenderer already initialized", e)
+    private fun ensureSelfVideoRendererInitialized() {
+        if (!isSelfVideoRendererInitialized && binding != null) {
+            try {
+                binding!!.selfVideoRenderer.init(rootEglBase!!.eglBaseContext, null)
+            } catch (e: IllegalStateException) {
+                Log.d(TAG, "selfVideoRenderer already initialized", e)
+            }
+            binding!!.selfVideoRenderer.setZOrderMediaOverlay(true)
+            binding!!.selfVideoRenderer.setEnableHardwareScaler(false)
+            binding!!.selfVideoRenderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+            binding!!.selfVideoRenderer.setOnTouchListener(SelfVideoTouchListener())
+            isSelfVideoRendererInitialized = true
         }
-        binding!!.selfVideoRenderer.setZOrderMediaOverlay(true)
-        // disabled because it causes some devices to crash
-        binding!!.selfVideoRenderer.setEnableHardwareScaler(false)
-        binding!!.selfVideoRenderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
-        binding!!.selfVideoRenderer.setOnTouchListener(SelfVideoTouchListener())
+    }
 
+    private fun ensurePipVideoRendererInitialized() {
+        if (!isPipVideoRendererInitialized && binding != null) {
+            try {
+                binding!!.pipSelfVideoRenderer.init(rootEglBase!!.eglBaseContext, null)
+            } catch (e: IllegalStateException) {
+                Log.d(TAG, "pipSelfVideoRenderer already initialized", e)
+            }
+            binding!!.pipSelfVideoRenderer.setZOrderMediaOverlay(true)
+            binding!!.pipSelfVideoRenderer.setEnableHardwareScaler(false)
+            binding!!.pipSelfVideoRenderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+            isPipVideoRendererInitialized = true
+        }
+    }
+
+    private fun attachSelfVideoRenderer() {
+        val videoTrack = localVideoTrack ?: return
+        if (binding == null) {
+            return
+        }
+        ensureSelfVideoRendererInitialized()
+        if (!isSelfVideoRendererAttached) {
+            videoTrack.addSink(binding!!.selfVideoRenderer)
+            isSelfVideoRendererAttached = true
+        }
+    }
+
+    private fun detachSelfVideoRenderer() {
+        if (binding == null) {
+            isSelfVideoRendererAttached = false
+            return
+        }
+        if (isSelfVideoRendererAttached) {
+            localVideoTrack?.removeSink(binding!!.selfVideoRenderer)
+            isSelfVideoRendererAttached = false
+        }
+    }
+
+    private fun attachPipVideoRenderer() {
+        val videoTrack = localVideoTrack ?: return
+        if (binding == null) {
+            return
+        }
+        ensurePipVideoRendererInitialized()
+        if (!isPipVideoRendererAttached) {
+            videoTrack.addSink(binding!!.pipSelfVideoRenderer)
+            isPipVideoRendererAttached = true
+        }
+    }
+
+    private fun detachPipVideoRenderer() {
+        if (binding == null) {
+            isPipVideoRendererAttached = false
+            return
+        }
+        if (isPipVideoRendererAttached) {
+            localVideoTrack?.removeSink(binding!!.pipSelfVideoRenderer)
+            isPipVideoRendererAttached = false
+        }
+    }
+
+    private fun releaseSelfVideoRenderer() {
+        if (!isSelfVideoRendererInitialized || binding == null) {
+            isSelfVideoRendererInitialized = false
+            isSelfVideoRendererAttached = false
+            return
+        }
+        detachSelfVideoRenderer()
+        binding!!.selfVideoRenderer.clearImage()
+        binding!!.selfVideoRenderer.release()
+        isSelfVideoRendererInitialized = false
+    }
+
+    private fun releasePipVideoRenderer() {
+        if (!isPipVideoRendererInitialized || binding == null) {
+            isPipVideoRendererInitialized = false
+            isPipVideoRendererAttached = false
+            return
+        }
+        detachPipVideoRenderer()
         binding!!.pipSelfVideoRenderer.clearImage()
         binding!!.pipSelfVideoRenderer.release()
+        isPipVideoRendererInitialized = false
+    }
+
+    private fun releaseLocalStream() {
+        if (localStream != null) {
+            localStream!!.dispose()
+            localStream = null
+            Log.d(TAG, "Disposed localStream")
+        } else {
+            Log.d(TAG, "localStream is null")
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun initSelfVideoViewForNormalMode() {
+        ensureSelfVideoRendererInitialized()
+        detachPipVideoRenderer()
     }
 
     private fun initGrid() {
@@ -1113,7 +1223,7 @@ class CallActivity : CallBaseActivity() {
         localVideoTrack = peerConnectionFactory!!.createVideoTrack("NCv0", videoSource)
         localStream!!.addTrack(localVideoTrack)
         localVideoTrack!!.setEnabled(false)
-        localVideoTrack!!.addSink(binding!!.selfVideoRenderer)
+        attachSelfVideoRenderer()
         localCallParticipantModel.isVideoEnabled = false
     }
 
@@ -1326,15 +1436,15 @@ class CallActivity : CallBaseActivity() {
                 binding!!.pipSelfVideoRenderer.visibility = View.VISIBLE
 
                 initSelfVideoViewForNormalMode()
+                attachSelfVideoRenderer()
             } else {
                 binding!!.selfVideoRenderer.visibility = View.INVISIBLE
                 binding!!.pipSelfVideoRenderer.visibility = View.INVISIBLE
 
+                detachSelfVideoRenderer()
+                detachPipVideoRenderer()
                 binding!!.selfVideoRenderer.clearImage()
-                binding!!.selfVideoRenderer.release()
-
                 binding!!.pipSelfVideoRenderer.clearImage()
-                binding!!.pipSelfVideoRenderer.release()
             }
         } else {
             if (enable) {
@@ -1452,18 +1562,12 @@ class CallActivity : CallBaseActivity() {
             signalingMessageReceiver!!.removeListener(localParticipantMessageListener)
             signalingMessageReceiver!!.removeListener(offerMessageListener)
         }
-        if (localStream != null) {
-            localStream!!.dispose()
-            localStream = null
-            Log.d(TAG, "Disposed localStream")
-        } else {
-            Log.d(TAG, "localStream is null")
+        if (!shouldTearDownOnDestroy && currentCallStatus !== CallStatus.LEAVING) {
+            Log.d(TAG, "onDestroy called without teardown - keeping call alive")
         }
-        if (currentCallStatus !== CallStatus.LEAVING) {
-            hangup(true, false)
+        if (runningInstance === this) {
+            runningInstance = null
         }
-        CallForegroundService.stop(applicationContext)
-        powerManagerUtils!!.updatePhoneState(PowerManagerUtils.PhoneState.IDLE)
         super.onDestroy()
     }
 
@@ -2034,6 +2138,8 @@ class CallActivity : CallBaseActivity() {
         Log.d(TAG, "hangup! shutDownView=$shutDownView")
         if (shutDownView) {
             setCallState(CallStatus.LEAVING)
+            shouldTearDownOnDestroy = true
+            releaseLocalStream()
         }
         stopCallingSound()
         callTimeHandler.removeCallbacksAndMessages(null)
@@ -2041,6 +2147,8 @@ class CallActivity : CallBaseActivity() {
 
         if (shutDownView) {
             terminateAudioVideo()
+            CallForegroundService.stop(applicationContext)
+            powerManagerUtils?.updatePhoneState(PowerManagerUtils.PhoneState.IDLE)
         }
 
         val peerConnectionIdsToEnd: MutableList<String> = ArrayList(peerConnectionWrapperList.size)
@@ -2073,11 +2181,8 @@ class CallActivity : CallBaseActivity() {
             videoCapturer!!.dispose()
             videoCapturer = null
         }
-        binding!!.selfVideoRenderer.clearImage()
-        binding!!.selfVideoRenderer.release()
-
-        binding!!.pipSelfVideoRenderer.clearImage()
-        binding!!.pipSelfVideoRenderer.release()
+        releaseSelfVideoRenderer()
+        releasePipVideoRenderer()
         if (audioSource != null) {
             audioSource!!.dispose()
             audioSource = null
@@ -3198,8 +3303,8 @@ class CallActivity : CallBaseActivity() {
         binding!!.callStates.callStateRelativeLayout.visibility = View.GONE
         binding!!.pipCallConversationNameTextView.text = conversationName
 
+        detachSelfVideoRenderer()
         binding!!.selfVideoRenderer.clearImage()
-        binding!!.selfVideoRenderer.release()
 
         if (participantItems.size == 1) {
             binding!!.pipOverlay.visibility = View.GONE
@@ -3209,21 +3314,11 @@ class CallActivity : CallBaseActivity() {
             if (localVideoTrack?.enabled() == true) {
                 binding!!.pipOverlay.visibility = View.VISIBLE
                 binding!!.pipSelfVideoRenderer.visibility = View.VISIBLE
-
-                try {
-                    binding!!.pipSelfVideoRenderer.init(rootEglBase!!.eglBaseContext, null)
-                } catch (e: IllegalStateException) {
-                    Log.d(TAG, "pipGroupVideoRenderer already initialized", e)
-                }
-                binding!!.pipSelfVideoRenderer.setZOrderMediaOverlay(true)
-                // disabled because it causes some devices to crash
-                binding!!.pipSelfVideoRenderer.setEnableHardwareScaler(false)
-                binding!!.pipSelfVideoRenderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
-
-                localVideoTrack?.addSink(binding?.pipSelfVideoRenderer)
+                attachPipVideoRenderer()
             } else {
                 binding!!.pipOverlay.visibility = View.VISIBLE
                 binding!!.pipSelfVideoRenderer.visibility = View.GONE
+                detachPipVideoRenderer()
             }
         }
     }
@@ -3232,6 +3327,11 @@ class CallActivity : CallBaseActivity() {
         Log.d(TAG, "updateUiForNormalMode")
         binding!!.pipOverlay.visibility = View.GONE
         binding!!.composeParticipantGrid.visibility = View.VISIBLE
+
+        detachPipVideoRenderer()
+        if (localVideoTrack != null && localVideoTrack!!.enabled()) {
+            attachSelfVideoRenderer()
+        }
 
         if (isVoiceOnlyCall) {
             binding!!.callControls.visibility = View.VISIBLE
@@ -3282,7 +3382,32 @@ class CallActivity : CallBaseActivity() {
     }
 
     companion object {
+        @Volatile
+        private var runningInstance: CallActivity? = null
         var active = false
+
+        private fun getRunningInstance(): CallActivity? =
+            runningInstance?.takeUnless { it.isFinishing || it.isDestroyed }
+
+        @JvmStatic
+        fun show(context: Context, extras: Bundle? = null) {
+            val intent = createShowIntent(context, extras)
+            context.startActivity(intent)
+        }
+
+        @JvmStatic
+        fun createShowIntent(context: Context, extras: Bundle? = null): Intent {
+            val hasRunningInstance = getRunningInstance() != null
+            return Intent(context, CallActivity::class.java).apply {
+                extras?.let { putExtras(Bundle(it)) }
+                if (hasRunningInstance) {
+                    addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                }
+                if (context !is Activity) {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            }
+        }
 
         // const val VIDEO_STREAM_TYPE_SCREEN = "screen"
         const val VIDEO_STREAM_TYPE_VIDEO = "video"
