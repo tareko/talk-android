@@ -56,6 +56,7 @@ public class CallParticipantList {
             Collection<Participant> unchanged = new ArrayList<>();
 
             Map<String, Participant> aggregatedSessions = new HashMap<>();
+            Map<String, Participant> aggregatedIdentities = new HashMap<>();
             for (Participant participant : participants) {
                 ArrayList<String> participantSessionIds = participant.getSessionIds();
                 if (participantSessionIds != null) {
@@ -65,6 +66,7 @@ public class CallParticipantList {
                         }
                     }
                 }
+                indexAggregatedIdentity(aggregatedIdentities, participant);
             }
 
             Collection<Participant> knownCallParticipantsNotFound = new ArrayList<>(callParticipants.values());
@@ -79,12 +81,14 @@ public class CallParticipantList {
                     callParticipants.put(sessionId, participantCopy);
                     joined.add(copyParticipant(participant));
                 } else if (knownCallParticipant && participant.getInCall() == Participant.InCallFlags.DISCONNECTED) {
-                    Participant aggregated = aggregatedSessions.get(sessionId);
-                    if (aggregated != null && aggregated.getInCall() != Participant.InCallFlags.DISCONNECTED) {
+                    Participant aggregated = findAggregatedReplacement(callParticipant, aggregatedSessions,
+                            aggregatedIdentities);
+                    if (aggregated != null) {
                         long aggregatedInCall = aggregated.getInCall();
                         boolean inCallChanged = callParticipant.getInCall() != aggregatedInCall;
                         callParticipant.setInCall(aggregatedInCall);
                         callParticipant.setSessionIds(copySessionIds(aggregated));
+                        callParticipant.setDisplayName(aggregated.getDisplayName());
                         if (inCallChanged) {
                             updated.add(copyParticipant(callParticipant));
                         } else {
@@ -111,13 +115,15 @@ public class CallParticipantList {
             }
 
             for (Participant callParticipant : new ArrayList<>(knownCallParticipantsNotFound)) {
-                Participant aggregated = aggregatedSessions.get(callParticipant.getSessionId());
-                if (aggregated != null && aggregated.getInCall() != Participant.InCallFlags.DISCONNECTED) {
+                Participant aggregated = findAggregatedReplacement(callParticipant, aggregatedSessions,
+                        aggregatedIdentities);
+                if (aggregated != null) {
                     knownCallParticipantsNotFound.remove(callParticipant);
                     long aggregatedInCall = aggregated.getInCall();
                     boolean inCallChanged = callParticipant.getInCall() != aggregatedInCall;
                     callParticipant.setInCall(aggregatedInCall);
                     callParticipant.setSessionIds(copySessionIds(aggregated));
+                    callParticipant.setDisplayName(aggregated.getDisplayName());
                     if (inCallChanged) {
                         updated.add(copyParticipant(callParticipant));
                     } else {
@@ -186,6 +192,63 @@ public class CallParticipantList {
                 return new ArrayList<>();
             }
             return new ArrayList<>(sessionIds);
+        }
+
+        private void indexAggregatedIdentity(Map<String, Participant> aggregatedIdentities, Participant participant) {
+            if (participant.getInCall() == Participant.InCallFlags.DISCONNECTED) {
+                return;
+            }
+
+            String actorKey = buildActorKey(participant.getActorType(), participant.getActorId());
+            if (actorKey != null) {
+                aggregatedIdentities.put(actorKey, participant);
+            }
+
+            String userKey = buildUserKey(participant.getUserId());
+            if (userKey != null) {
+                aggregatedIdentities.put(userKey, participant);
+            }
+        }
+
+        private Participant findAggregatedReplacement(Participant participant,
+                                                      Map<String, Participant> aggregatedSessions,
+                                                      Map<String, Participant> aggregatedIdentities) {
+            Participant aggregated = aggregatedSessions.get(participant.getSessionId());
+            if (aggregated != null && aggregated.getInCall() != Participant.InCallFlags.DISCONNECTED) {
+                return aggregated;
+            }
+
+            String actorKey = buildActorKey(participant.getActorType(), participant.getActorId());
+            if (actorKey != null) {
+                aggregated = aggregatedIdentities.get(actorKey);
+                if (aggregated != null && aggregated.getInCall() != Participant.InCallFlags.DISCONNECTED) {
+                    return aggregated;
+                }
+            }
+
+            String userKey = buildUserKey(participant.getUserId());
+            if (userKey != null) {
+                aggregated = aggregatedIdentities.get(userKey);
+                if (aggregated != null && aggregated.getInCall() != Participant.InCallFlags.DISCONNECTED) {
+                    return aggregated;
+                }
+            }
+
+            return null;
+        }
+
+        private String buildActorKey(String actorType, String actorId) {
+            if (actorType == null || actorId == null) {
+                return null;
+            }
+            return actorType + ":" + actorId;
+        }
+
+        private String buildUserKey(String userId) {
+            if (userId == null) {
+                return null;
+            }
+            return "user:" + userId;
         }
     };
 
