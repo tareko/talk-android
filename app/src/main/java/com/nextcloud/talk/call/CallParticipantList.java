@@ -55,6 +55,18 @@ public class CallParticipantList {
             Collection<Participant> left = new ArrayList<>();
             Collection<Participant> unchanged = new ArrayList<>();
 
+            Map<String, Participant> aggregatedSessions = new HashMap<>();
+            for (Participant participant : participants) {
+                ArrayList<String> participantSessionIds = participant.getSessionIds();
+                if (participantSessionIds != null) {
+                    for (String aggregatedSessionId : participantSessionIds) {
+                        if (aggregatedSessionId != null) {
+                            aggregatedSessions.put(aggregatedSessionId, participant);
+                        }
+                    }
+                }
+            }
+
             Collection<Participant> knownCallParticipantsNotFound = new ArrayList<>(callParticipants.values());
 
             for (Participant participant : participants) {
@@ -63,7 +75,8 @@ public class CallParticipantList {
 
                 boolean knownCallParticipant = callParticipant != null;
                 if (!knownCallParticipant && participant.getInCall() != Participant.InCallFlags.DISCONNECTED) {
-                    callParticipants.put(sessionId, copyParticipant(participant));
+                    Participant participantCopy = copyParticipant(participant);
+                    callParticipants.put(sessionId, participantCopy);
                     joined.add(copyParticipant(participant));
                 } else if (knownCallParticipant && participant.getInCall() == Participant.InCallFlags.DISCONNECTED) {
                     callParticipants.remove(sessionId);
@@ -72,13 +85,31 @@ public class CallParticipantList {
                     left.add(callParticipant);
                 } else if (knownCallParticipant && callParticipant.getInCall() != participant.getInCall()) {
                     callParticipant.setInCall(participant.getInCall());
+                    callParticipant.setSessionIds(copySessionIds(participant));
                     updated.add(copyParticipant(participant));
                 } else if (knownCallParticipant) {
+                    callParticipant.setSessionIds(copySessionIds(participant));
                     unchanged.add(copyParticipant(participant));
                 }
 
                 if (knownCallParticipant) {
                     knownCallParticipantsNotFound.remove(callParticipant);
+                }
+            }
+
+            for (Participant callParticipant : new ArrayList<>(knownCallParticipantsNotFound)) {
+                Participant aggregated = aggregatedSessions.get(callParticipant.getSessionId());
+                if (aggregated != null && aggregated.getInCall() != Participant.InCallFlags.DISCONNECTED) {
+                    knownCallParticipantsNotFound.remove(callParticipant);
+                    int aggregatedInCall = aggregated.getInCall();
+                    boolean inCallChanged = callParticipant.getInCall() != aggregatedInCall;
+                    callParticipant.setInCall(aggregatedInCall);
+                    callParticipant.setSessionIds(copySessionIds(aggregated));
+                    if (inCallChanged) {
+                        updated.add(copyParticipant(callParticipant));
+                    } else {
+                        unchanged.add(copyParticipant(callParticipant));
+                    }
                 }
             }
 
@@ -128,10 +159,20 @@ public class CallParticipantList {
             copiedParticipant.setInternal(participant.getInternal());
             copiedParticipant.setLastPing(participant.getLastPing());
             copiedParticipant.setSessionId(participant.getSessionId());
+            copiedParticipant.setSessionIds(copySessionIds(participant));
             copiedParticipant.setType(participant.getType());
             copiedParticipant.setUserId(participant.getUserId());
+            copiedParticipant.setDisplayName(participant.getDisplayName());
 
             return copiedParticipant;
+        }
+
+        private ArrayList<String> copySessionIds(Participant participant) {
+            ArrayList<String> sessionIds = participant.getSessionIds();
+            if (sessionIds == null) {
+                return new ArrayList<>();
+            }
+            return new ArrayList<>(sessionIds);
         }
     };
 
