@@ -267,6 +267,7 @@ class CallActivity : CallBaseActivity() {
     private val screenParticipantDisplayItemManagersHandler = Handler(Looper.getMainLooper())
     private val callParticipantEventDisplayers: MutableMap<String?, CallParticipantEventDisplayer> = HashMap()
     private val callParticipantEventDisplayersHandler = Handler(Looper.getMainLooper())
+    private var lastSelfParticipantSnapshot: Participant? = null
     private val callParticipantListObserver: CallParticipantList.Observer = object : CallParticipantList.Observer {
         override fun onCallParticipantsChanged(
             joined: Collection<Participant>,
@@ -2043,6 +2044,7 @@ class CallActivity : CallBaseActivity() {
 
     private fun hangup(shutDownView: Boolean, endCallForAll: Boolean) {
         Log.d(TAG, "hangup! shutDownView=$shutDownView")
+        lastSelfParticipantSnapshot = null
         if (shutDownView) {
             setCallState(CallStatus.LEAVING)
         }
@@ -2242,18 +2244,30 @@ class CallActivity : CallBaseActivity() {
             currentUserIdentifiers.add(numericId)
         }
 
-        for (participant in participantsInCall) {
-            val inCallFlag = participant.inCall
+        val matchesSelfSession: (Participant) -> Boolean = { participant ->
             val participantSessionId = participant.sessionId
-            val matchesCurrentSession = currentSessionId != null && (
+            currentSessionId != null && (
                 participantSessionId == currentSessionId ||
                     participant.sessionIds.any { it == currentSessionId }
                 )
-            val matchesCurrentUser = currentUserIdentifiers.any { identifier ->
+        }
+        val matchesSelfUser: (Participant) -> Boolean = { participant ->
+            currentUserIdentifiers.any { identifier ->
                 identifier == participant.calculatedActorId ||
                     identifier == participant.actorId ||
                     identifier == participant.userId
             }
+        }
+        val selfWasExplicitlyRemoved = left.any { participant ->
+            matchesSelfSession(participant) ||
+                (currentSessionId == null && matchesSelfUser(participant))
+        }
+
+        for (participant in participantsInCall) {
+            val inCallFlag = participant.inCall
+            val participantSessionId = participant.sessionId
+            val matchesCurrentSession = matchesSelfSession(participant)
+            val matchesCurrentUser = matchesSelfUser(participant)
 
             if (matchesCurrentSession || matchesCurrentUser) {
                 if (matchesCurrentSession) {
@@ -2278,6 +2292,24 @@ class CallActivity : CallBaseActivity() {
             }
         }
 
+        if (isSelfInCall && selfParticipant != null) {
+            lastSelfParticipantSnapshot = selfParticipant.copy(
+                sessionIds = ArrayList(selfParticipant.sessionIds)
+            )
+        } else if (!isSelfInCall && !selfWasExplicitlyRemoved &&
+            ApplicationWideCurrentRoomHolder.getInstance().isInCall
+        ) {
+            if (selfParticipant == null) {
+                lastSelfParticipantSnapshot?.let { cachedParticipant ->
+                    selfParticipant = cachedParticipant
+                }
+            }
+            Log.d(TAG, "Self missing from participant update without disconnect notice; keeping existing call state")
+            isSelfInCall = true
+        } else if (selfWasExplicitlyRemoved) {
+            lastSelfParticipantSnapshot = null
+        }
+
         if (!isSelfInCall &&
             currentCallStatus !== CallStatus.LEAVING &&
             ApplicationWideCurrentRoomHolder.getInstance().isInCall
@@ -2290,6 +2322,7 @@ class CallActivity : CallBaseActivity() {
         if (!isSelfInCall) {
             Log.d(TAG, "Self not in call, disconnecting from all other sessions")
             removeSessions(participantsInCall)
+            removeSessions(left)
             return
         }
         if (currentCallStatus === CallStatus.LEAVING) {
