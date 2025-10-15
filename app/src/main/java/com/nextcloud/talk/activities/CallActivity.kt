@@ -304,6 +304,7 @@ class CallActivity : CallBaseActivity() {
     private var hasExternalSignalingServer = false
     private var conversationPassword: String? = null
     private var powerManagerUtils: PowerManagerUtils? = null
+    private var tearingDownCall = false
     private var handler: Handler? = null
     private var currentCallStatus: CallStatus? = null
     private var mediaPlayer: MediaPlayer? = null
@@ -379,6 +380,7 @@ class CallActivity : CallBaseActivity() {
         Log.d(TAG, "onCreate")
         super.onCreate(savedInstanceState)
         sharedApplication!!.componentApplication.inject(this)
+        tearingDownCall = false
 
         rootEglBase = EglBase.create()
         binding = CallActivityBinding.inflate(layoutInflater)
@@ -1459,20 +1461,21 @@ class CallActivity : CallBaseActivity() {
             signalingMessageReceiver!!.removeListener(localParticipantMessageListener)
             signalingMessageReceiver!!.removeListener(offerMessageListener)
         }
-        if (localStream != null) {
-            localStream!!.dispose()
-            localStream = null
-            Log.d(TAG, "Disposed localStream")
-        } else {
-            Log.d(TAG, "localStream is null")
-        }
-        if (currentCallStatus !== CallStatus.LEAVING) {
-            hangup(true, false)
+        if (tearingDownCall || currentCallStatus === CallStatus.LEAVING) {
+            disposeLocalStream()
+        } else if (currentCallStatus !== CallStatus.LEAVING) {
+            Log.d(TAG, "onDestroy invoked without explicit hangup; skipping teardown")
         }
         currentInstance = WeakReference(null)
-        CallForegroundService.stop(applicationContext)
-        powerManagerUtils!!.updatePhoneState(PowerManagerUtils.PhoneState.IDLE)
         super.onDestroy()
+    }
+
+    private fun disposeLocalStream() {
+        localStream?.let {
+            it.dispose()
+            localStream = null
+            Log.d(TAG, "Disposed localStream")
+        }
     }
 
     private fun fetchSignalingSettings() {
@@ -2048,6 +2051,9 @@ class CallActivity : CallBaseActivity() {
 
     private fun hangup(shutDownView: Boolean, endCallForAll: Boolean) {
         Log.d(TAG, "hangup! shutDownView=$shutDownView")
+        if (shutDownView) {
+            tearingDownCall = true
+        }
         lastSelfParticipantSnapshot = null
         if (shutDownView) {
             setCallState(CallStatus.LEAVING)
@@ -2058,6 +2064,9 @@ class CallActivity : CallBaseActivity() {
 
         if (shutDownView) {
             terminateAudioVideo()
+            disposeLocalStream()
+            CallForegroundService.stop(applicationContext)
+            powerManagerUtils?.updatePhoneState(PowerManagerUtils.PhoneState.IDLE)
         }
 
         val peerConnectionIdsToEnd: MutableList<String> = ArrayList(peerConnectionWrapperList.size)
