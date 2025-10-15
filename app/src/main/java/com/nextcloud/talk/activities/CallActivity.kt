@@ -2231,18 +2231,22 @@ class CallActivity : CallBaseActivity() {
 
         for (participant in participantsInCall) {
             val inCallFlag = participant.inCall
-            if (participant.sessionId != currentSessionId) {
-                Log.d(
-                    TAG,
-                    "   inCallFlag of participant " +
-                        participant.sessionId!!.substring(0, SESSION_ID_PREFFIX_END) +
-                        " : " +
-                        inCallFlag
-                )
-            } else {
+            val participantSessionId = participant.sessionId
+            val matchesCurrentSession = participantSessionId == currentSessionId ||
+                participant.sessionIds.contains(currentSessionId)
+
+            if (matchesCurrentSession) {
                 Log.d(TAG, "   inCallFlag of currentSessionId: $inCallFlag")
                 isSelfInCall = inCallFlag != 0L
                 selfParticipant = participant
+            } else if (participantSessionId != null) {
+                Log.d(
+                    TAG,
+                    "   inCallFlag of participant " +
+                        participantSessionId.substring(0, SESSION_ID_PREFFIX_END) +
+                        " : " +
+                        inCallFlag
+                )
             }
         }
 
