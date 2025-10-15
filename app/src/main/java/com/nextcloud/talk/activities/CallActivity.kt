@@ -361,6 +361,7 @@ class CallActivity : CallBaseActivity() {
     private var canPublishVideoStream = false
     private var isModerator = false
     private var reactionAnimator: ReactionAnimator? = null
+    private var isSelfVideoRendererInitialized = false
     private var othersInCall = false
     private var isOneToOneConversation = false
 
@@ -935,10 +936,9 @@ class CallActivity : CallBaseActivity() {
 
     @SuppressLint("ClickableViewAccessibility")
     private fun initSelfVideoViewForNormalMode() {
-        try {
+        if (!isSelfVideoRendererInitialized) {
             binding!!.selfVideoRenderer.init(rootEglBase!!.eglBaseContext, null)
-        } catch (e: IllegalStateException) {
-            Log.d(TAG, "selfVideoRenderer already initialized", e)
+            isSelfVideoRendererInitialized = true
         }
         binding!!.selfVideoRenderer.setZOrderMediaOverlay(true)
         // disabled because it causes some devices to crash
@@ -2101,6 +2101,7 @@ class CallActivity : CallBaseActivity() {
         }
         binding!!.selfVideoRenderer.clearImage()
         binding!!.selfVideoRenderer.release()
+        isSelfVideoRendererInitialized = false
 
         binding!!.pipSelfVideoRenderer.clearImage()
         binding!!.pipSelfVideoRenderer.release()
@@ -2271,7 +2272,9 @@ class CallActivity : CallBaseActivity() {
                     identifier == participant.userId
             }
         }
-        val selfWasExplicitlyRemoved = left.any { participant ->
+        val shouldIgnoreSelfDisconnect = !tearingDownCall && currentCallStatus !== CallStatus.LEAVING
+
+        var selfWasExplicitlyRemoved = left.any { participant ->
             matchesSelfSession(participant) ||
                 (currentSessionId == null && matchesSelfUser(participant))
         }
@@ -2288,7 +2291,12 @@ class CallActivity : CallBaseActivity() {
                 } else {
                     Log.d(TAG, "   inCallFlag of aggregated self: $inCallFlag")
                 }
-                if (inCallFlag != 0L) {
+                if (inCallFlag == Participant.InCallFlags.DISCONNECTED) {
+                    if (shouldIgnoreSelfDisconnect) {
+                        Log.d(TAG, "   ignoring transient self disconnect while call is active")
+                        isSelfInCall = true
+                    }
+                } else if (inCallFlag != 0L) {
                     isSelfInCall = true
                 }
                 if (matchesCurrentSession || selfParticipant == null) {
@@ -2319,8 +2327,19 @@ class CallActivity : CallBaseActivity() {
             }
             Log.d(TAG, "Self missing from participant update without disconnect notice; keeping existing call state")
             isSelfInCall = true
-        } else if (selfWasExplicitlyRemoved) {
+        } else if (selfWasExplicitlyRemoved && !shouldIgnoreSelfDisconnect) {
             lastSelfParticipantSnapshot = null
+        }
+
+        if (selfWasExplicitlyRemoved && shouldIgnoreSelfDisconnect) {
+            Log.d(TAG, "Explicit self removal received while call is active; deferring hangup")
+            selfWasExplicitlyRemoved = false
+            if (!isSelfInCall) {
+                lastSelfParticipantSnapshot?.let { cachedParticipant ->
+                    selfParticipant = cachedParticipant
+                    isSelfInCall = true
+                }
+            }
         }
 
         if (!isSelfInCall &&
@@ -2354,7 +2373,12 @@ class CallActivity : CallBaseActivity() {
         if (othersInCall && currentCallStatus !== CallStatus.IN_CONVERSATION) {
             setCallState(CallStatus.IN_CONVERSATION)
         }
-        removeSessions(left)
+        val remoteLeft = left.filterNot { participant ->
+            matchesSelfSession(participant) || matchesSelfUser(participant)
+        }
+        if (remoteLeft.isNotEmpty()) {
+            removeSessions(remoteLeft)
+        }
     }
 
     private fun removeSessions(sessions: Collection<Participant>) {
