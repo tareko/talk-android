@@ -32,6 +32,7 @@
         android:name="android.permission.GET_ACCOUNTS"
         android:maxSdkVersion="22" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.REORDER_TASKS" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
@@ -193,6 +194,10 @@
             android:name=".fullscreenfile.FullScreenMediaActivity"
             android:configChanges="orientation|keyboardHidden|screenSize"
             android:theme="@style/FullScreenMediaTheme" />
+
+        <receiver
+            android:name=".receivers.ReturnToCallReceiver"
+            android:exported="false" />
 
         <activity
             android:name=".fullscreenfile.FullScreenTextViewerActivity"
