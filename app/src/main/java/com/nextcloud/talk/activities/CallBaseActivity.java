@@ -143,21 +143,8 @@ public abstract class CallBaseActivity extends BaseActivity {
     }
 
     private boolean shouldFinishOnStop() {
-        if (!isInPipMode) {
-            return false;
-        }
-
-        PowerManager powerManager = (PowerManager) getSystemService(Context.POWER_SERVICE);
-        if (powerManager == null) {
-            return true;
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
-            return powerManager.isInteractive();
-        } else {
-            //noinspection deprecation
-            return powerManager.isScreenOn();
-        }
+        // Never finish the call activity automatically - calls should only end when user explicitly ends them
+        return false;
     }
 
     public abstract void updateUiForPipMode();
