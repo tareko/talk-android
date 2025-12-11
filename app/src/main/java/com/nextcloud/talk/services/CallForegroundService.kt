@@ -57,6 +57,21 @@ class CallForegroundService : Service() {
         val contentTitle = conversationName?.takeIf { it.isNotBlank() }
             ?: getString(R.string.nc_call_ongoing_notification_default_title)
         val pendingIntent = createContentIntent(callExtras)
+        
+        // Create action to return to call
+        val returnToCallAction = NotificationCompat.Action.Builder(
+            R.drawable.ic_call_white_24dp,
+            getString(R.string.nc_call_ongoing_notification_return_action),
+            pendingIntent
+        ).build()
+        
+        // Create action to end call
+        val endCallPendingIntent = createEndCallIntent(callExtras)
+        val endCallAction = NotificationCompat.Action.Builder(
+            R.drawable.ic_close_white_24px,
+            getString(R.string.nc_call_ongoing_notification_end_action),
+            endCallPendingIntent
+        ).build()
 
         return NotificationCompat.Builder(this, channelId)
             .setContentTitle(contentTitle)
@@ -69,6 +84,9 @@ class CallForegroundService : Service() {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setContentIntent(pendingIntent)
             .setShowWhen(false)
+            .addAction(returnToCallAction)
+            .addAction(endCallAction)
+            .setAutoCancel(false)
             .build()
     }
 
@@ -79,12 +97,22 @@ class CallForegroundService : Service() {
 
     private fun createContentIntent(callExtras: Bundle?): PendingIntent {
         val intent = Intent(this, CallActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
             callExtras?.let { putExtras(Bundle(it)) }
         }
 
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         return PendingIntent.getActivity(this, 0, intent, flags)
+    }
+    
+    private fun createEndCallIntent(callExtras: Bundle?): PendingIntent {
+        val intent = Intent(this, EndCallReceiver::class.java).apply {
+            action = "com.nextcloud.talk.END_CALL"
+            callExtras?.let { putExtras(Bundle(it)) }
+        }
+        
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        return PendingIntent.getBroadcast(this, 1, intent, flags)
     }
 
     private fun resolveForegroundServiceType(callExtras: Bundle?): Int {

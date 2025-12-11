@@ -253,6 +253,9 @@ class CallActivity : CallBaseActivity() {
     private val cameraSwitchHandler = Handler()
 
     private val callTimeHandler = Handler(Looper.getMainLooper())
+    
+    // Track if we're intentionally leaving the call
+    private var isIntentionallyLeavingCall = false
 
     // push to talk
     private var isPushToTalkActive = false
@@ -383,6 +386,10 @@ class CallActivity : CallBaseActivity() {
         Log.d(TAG, "onCreate")
         super.onCreate(savedInstanceState)
         sharedApplication!!.componentApplication.inject(this)
+        
+        // Register broadcast receiver for ending call from notification
+        val endCallFilter = IntentFilter("com.nextcloud.talk.END_CALL_FROM_NOTIFICATION")
+        registerReceiver(endCallFromNotificationReceiver, endCallFilter)
 
         callViewModel = ViewModelProvider(this, viewModelFactory)[CallViewModel::class.java]
 
@@ -782,6 +789,7 @@ class CallActivity : CallBaseActivity() {
                 true
             }
             binding!!.hangupButton.setOnClickListener {
+                isIntentionallyLeavingCall = true
                 hangup(shutDownView = true, endCallForAll = true)
             }
             binding!!.endCallPopupMenu.setOnClickListener {
@@ -796,6 +804,7 @@ class CallActivity : CallBaseActivity() {
                 }
             }
             binding!!.hangupButton.setOnClickListener {
+                isIntentionallyLeavingCall = true
                 hangup(shutDownView = true, endCallForAll = false)
             }
             binding!!.endCallPopupMenu.setOnClickListener {
@@ -1413,10 +1422,24 @@ class CallActivity : CallBaseActivity() {
             Log.d(TAG, "localStream is null")
         }
         if (currentCallStatus !== CallStatus.LEAVING) {
-            hangup(true, false)
+            // Only hangup if we're intentionally leaving
+            if (isIntentionallyLeavingCall) {
+                hangup(true, false)
+            }
         }
-        CallForegroundService.stop(applicationContext)
+        // Only stop the foreground service if we're actually leaving the call
+        if (isIntentionallyLeavingCall || currentCallStatus === CallStatus.LEAVING) {
+            CallForegroundService.stop(applicationContext)
+        }
         powerManagerUtils!!.updatePhoneState(PowerManagerUtils.PhoneState.IDLE)
+        
+        // Unregister receiver
+        try {
+            unregisterReceiver(endCallFromNotificationReceiver)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to unregister receiver", e)
+        }
+        
         super.onDestroy()
     }
 
@@ -3162,5 +3185,16 @@ class CallActivity : CallBaseActivity() {
         private const val DELAY_ON_ERROR_STOP_THRESHOLD: Int = 16
 
         private const val SESSION_ID_PREFFIX_END: Int = 4
+    }
+    
+    // Broadcast receiver to handle end call from notification
+    private val endCallFromNotificationReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == "com.nextcloud.talk.END_CALL_FROM_NOTIFICATION") {
+                Log.d(TAG, "Received end call from notification broadcast")
+                isIntentionallyLeavingCall = true
+                hangup(shutDownView = true, endCallForAll = false)
+            }
+        }
     }
 }
